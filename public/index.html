@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>API smoke console</title>
+    <meta
+      name="description"
+      content="Run the full request sequence against the API and see what came back on the wire."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232b36e8'/%3E%3Cpath d='M8 20l5-8 4 5 3-4 4 7' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/console.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead__identity">
+        <h1 class="masthead__title">API smoke console</h1>
+        <p class="masthead__subtitle">
+          Fifteen calls through the gateway, from an empty database to a closed session.
+        </p>
+      </div>
+
+      <div class="masthead__status">
+        <dl class="uplink" id="uplink">
+          <div class="uplink__row">
+            <dt>Gateway</dt>
+            <dd>
+              <span class="dot dot--idle" id="dot-gateway"></span
+              ><span id="state-gateway">checking</span>
+            </dd>
+          </div>
+          <div class="uplink__row">
+            <dt>Core service</dt>
+            <dd>
+              <span class="dot dot--idle" id="dot-core"></span><span id="state-core">checking</span>
+            </dd>
+          </div>
+          <div class="uplink__row">
+            <dt>Database</dt>
+            <dd>
+              <span class="dot dot--idle" id="dot-db"></span><span id="state-db">checking</span>
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel--run" aria-labelledby="run-heading">
+        <div class="panel__head">
+          <h2 class="panel__title" id="run-heading">The sequence</h2>
+          <div class="panel__actions">
+            <button class="button button--primary" id="run-flow" type="button">
+              Run the sequence
+            </button>
+            <button class="button" id="reset-flow" type="button">Clear</button>
+          </div>
+        </div>
+
+        <div class="verdict" id="verdict" data-state="idle">
+          <p class="verdict__line" id="verdict-line">Nothing has run yet.</p>
+          <progress class="verdict__meter" id="verdict-meter" max="15" value="0"></progress>
+          <p class="verdict__hint" id="verdict-hint">
+            Each step runs against this page's own origin, so it exercises the gateway, the proxy,
+            the service and MongoDB in one pass.
+          </p>
+        </div>
+
+        <ol class="rail" id="rail"></ol>
+      </section>
+
+      <aside class="side">
+        <section class="panel" aria-labelledby="session-heading">
+          <div class="panel__head">
+            <h2 class="panel__title" id="session-heading">Session</h2>
+          </div>
+          <dl class="session" id="session">
+            <div class="session__row">
+              <dt>Signed in as</dt>
+              <dd id="session-user">nobody</dd>
+            </div>
+            <div class="session__row">
+              <dt>Role</dt>
+              <dd id="session-role">&mdash;</dd>
+            </div>
+            <div class="session__row">
+              <dt>Access token</dt>
+              <dd class="truncate" id="session-access">&mdash;</dd>
+            </div>
+            <div class="session__row">
+              <dt>Refresh token</dt>
+              <dd class="truncate" id="session-refresh">&mdash;</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel" aria-labelledby="manual-heading">
+          <div class="panel__head">
+            <h2 class="panel__title" id="manual-heading">Try it by hand</h2>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Manual requests">
+            <button
+              class="tab tab--active"
+              id="tab-auth"
+              role="tab"
+              aria-selected="true"
+              aria-controls="pane-auth"
+              type="button"
+            >
+              Account
+            </button>
+            <button
+              class="tab"
+              id="tab-tasks"
+              role="tab"
+              aria-selected="false"
+              aria-controls="pane-tasks"
+              type="button"
+            >
+              Tasks
+            </button>
+          </div>
+
+          <div class="pane" id="pane-auth" role="tabpanel" aria-labelledby="tab-auth">
+            <label class="field">
+              <span class="field__label">Name</span>
+              <input
+                class="field__input"
+                id="input-name"
+                type="text"
+                value="Ada Lovelace"
+                autocomplete="name"
+              />
+            </label>
+            <label class="field">
+              <span class="field__label">Email</span>
+              <input
+                class="field__input"
+                id="input-email"
+                type="email"
+                placeholder="you@example.com"
+                autocomplete="email"
+              />
+            </label>
+            <label class="field">
+              <span class="field__label">Password</span>
+              <input
+                class="field__input"
+                id="input-password"
+                type="password"
+                value="Str0ng!Pass1"
+                autocomplete="current-password"
+              />
+              <span class="field__note">Needs upper, lower, a number and a symbol.</span>
+            </label>
+            <div class="button-row">
+              <button class="button" id="do-register" type="button">Create account</button>
+              <button class="button" id="do-login" type="button">Sign in</button>
+              <button class="button" id="do-refresh" type="button">Rotate tokens</button>
+              <button class="button" id="do-logout" type="button">Sign out</button>
+            </div>
+          </div>
+
+          <div
+            class="pane pane--hidden"
+            id="pane-tasks"
+            role="tabpanel"
+            aria-labelledby="tab-tasks"
+          >
+            <label class="field">
+              <span class="field__label">Title</span>
+              <input
+                class="field__input"
+                id="input-title"
+                type="text"
+                value="Review the deployment plan"
+              />
+            </label>
+            <label class="field">
+              <span class="field__label">Priority</span>
+              <select class="field__input" id="input-priority">
+                <option value="low">low</option>
+                <option value="medium" selected>medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button class="button" id="do-create-task" type="button">Add task</button>
+              <button class="button" id="do-list-tasks" type="button">List tasks</button>
+              <button class="button" id="do-stats" type="button">Count by status</button>
+            </div>
+            <ul class="tasklist" id="tasklist">
+              <li class="tasklist__empty">No tasks loaded. Sign in, then add one.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="links-heading">
+          <div class="panel__head">
+            <h2 class="panel__title" id="links-heading">Elsewhere</h2>
+          </div>
+          <ul class="links">
+            <li><a href="/api/v1/docs" target="_blank" rel="noreferrer">OpenAPI explorer</a></li>
+            <li>
+              <a href="/gateway/routes" target="_blank" rel="noreferrer">Gateway route table</a>
+            </li>
+            <li>
+              <a href="/gateway/health/services" target="_blank" rel="noreferrer"
+                >Upstream health</a
+              >
+            </li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <script src="/assets/console.js"></script>
+  </body>
+</html>

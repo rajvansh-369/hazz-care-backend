@@ -1,0 +1,40 @@
+{
+  "root": true,
+  "env": {
+    "node": true,
+    "es2022": true,
+    "jest": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "script"
+  },
+  "extends": ["eslint:recommended", "plugin:security/recommended-legacy", "prettier"],
+  "plugins": ["jest", "security", "prettier"],
+  "rules": {
+    "no-console": "error",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "ignoreRestSiblings": true }],
+    "no-param-reassign": ["error", { "props": false }],
+    "prefer-const": "error",
+    "eqeqeq": ["error", "smart"],
+    "curly": ["error", "all"],
+    "func-names": "off",
+    "security/detect-object-injection": "warn",
+    "security/detect-non-literal-fs-filename": "off"
+  },
+  "overrides": [
+    {
+      "files": ["tests/**/*.js"],
+      "rules": {
+        "security/detect-object-injection": "off"
+      }
+    },
+    {
+      "files": ["src/scripts/**/*.js"],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["node_modules/", "coverage/", "public/assets/"]
+}
