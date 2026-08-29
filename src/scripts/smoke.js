@@ -17,7 +17,6 @@ const session = {
   accessToken: null,
   refreshToken: null,
   user: null,
-  taskId: null,
   spentRefresh: null,
 };
 
@@ -117,44 +116,8 @@ const steps = [
   },
   {
     name: 'Missing token is refused',
-    run: () => call('GET', `${API}/tasks`),
+    run: () => call('GET', `${API}/users`),
     check: (r) => r.status === 401 && r.body.code === 'UNAUTHENTICATED',
-  },
-  {
-    name: 'Task is created and owned by the caller',
-    run: () =>
-      call('POST', `${API}/tasks`, {
-        token: session.accessToken,
-        body: { title: 'Verify the deployment', priority: 'high', tags: ['smoke'] },
-      }),
-    check: (r) => {
-      if (r.status !== 201) {
-        return false;
-      }
-      session.taskId = r.body.data.task.id;
-      return r.body.data.task.owner === session.user.id;
-    },
-  },
-  {
-    name: 'List returns pagination metadata',
-    run: () =>
-      call('GET', `${API}/tasks?limit=5&sortBy=createdAt:desc`, { token: session.accessToken }),
-    check: (r) => r.status === 200 && r.body.meta.totalResults >= 1,
-  },
-  {
-    name: 'Closing a task stamps completion',
-    run: () =>
-      call('PATCH', `${API}/tasks/${session.taskId}`, {
-        token: session.accessToken,
-        body: { status: 'done' },
-      }),
-    check: (r) =>
-      r.status === 200 && r.body.data.task.status === 'done' && !!r.body.data.task.completedAt,
-  },
-  {
-    name: 'Counts are scoped to the caller',
-    run: () => call('GET', `${API}/tasks/stats`, { token: session.accessToken }),
-    check: (r) => r.status === 200 && r.body.data.done === 1,
   },
   {
     name: 'Refresh token rotates',

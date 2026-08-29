@@ -85,7 +85,7 @@ app.use(cookieParser());
 
 // 6. Payload hygiene: strip Mongo operators, collapse duplicated query keys.
 app.use(mongoSanitize({ replaceWith: '_' }));
-app.use(hpp({ whitelist: ['sortBy', 'status', 'priority', 'tags'] }));
+app.use(hpp({ whitelist: ['sortBy', 'status'] }));
 
 // 7. Response compression.
 app.use(compression());
