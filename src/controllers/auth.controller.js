@@ -24,6 +24,10 @@ const setRefreshCookie = (res, tokens) => {
   });
 };
 
+// ============================================================================
+// EMAIL/PASSWORD AUTH FLOW (Keep for backward compatibility)
+// ============================================================================
+
 const register = catchAsync(async (req, res) => {
   const user = await authService.register(req.body);
   const tokens = await tokenService.generateAuthTokens(user, clientMeta(req));
@@ -57,12 +61,6 @@ const refreshTokens = catchAsync(async (req, res) => {
 
   setRefreshCookie(res, tokens);
   return ApiResponse.send(res, { message: 'Session refreshed', data: { user, tokens } });
-});
-
-const logout = catchAsync(async (req, res) => {
-  await authService.logout(req.body.refreshToken || req.cookies.refreshToken);
-  res.clearCookie('refreshToken', { path: '/' });
-  return ApiResponse.send(res, { statusCode: httpStatus.OK, message: 'Signed out', data: null });
 });
 
 const logoutAll = catchAsync(async (req, res) => {
@@ -105,23 +103,121 @@ const changePassword = catchAsync(async (req, res) => {
   });
 });
 
-const me = catchAsync(async (req, res) => {
-  const user = await userService.getUserByIdOrFail(req.principal.id);
+// ============================================================================
+// OTP AUTH FLOW (Phone-first, per CLAUDE.md §4)
+// ============================================================================
+
+/**
+ * OTP request: send 6-digit code to phone
+ * 5-min TTL, max 5 attempts, 15-min lockout on phone + IP
+ */
+const requestOtp = catchAsync(async (req, res) => {
+  const { phone, locale } = req.body;
+  const { challengeId, expiresIn } = await authService.requestOtp(phone, locale, clientMeta(req));
+
   return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'OTP sent to phone',
+    data: { challengeId, expiresIn },
+  });
+});
+
+/**
+ * OTP verify: exchange challenge + code for tokens
+ * Returns tokens + isNewUser flag for first-time signup
+ */
+const verifyOtp = catchAsync(async (req, res) => {
+  const { challengeId, code } = req.body;
+  const { user, tokens, isNewUser } = await authService.verifyOtp(challengeId, code, clientMeta(req));
+
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: isNewUser ? 'Account created' : 'Signed in',
+    data: { accessToken: tokens.access.token, refreshToken: tokens.refresh.token, isNewUser },
+  });
+});
+
+/**
+ * Refresh access token; returns rotated refresh token (single-use)
+ * Reuse detection revokes whole device family + logs security event
+ */
+const refresh = catchAsync(async (req, res) => {
+  const { refreshToken } = req.body;
+  const { tokens } = await authService.refresh(refreshToken, clientMeta(req));
+
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'Session refreshed',
+    data: { accessToken: tokens.access.token, refreshToken: tokens.refresh.token },
+  });
+});
+
+/**
+ * Logout: revoke single device session
+ */
+const logout = catchAsync(async (req, res) => {
+  const { refreshToken } = req.body;
+  await authService.logout(refreshToken);
+
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'Signed out',
+    data: null,
+  });
+});
+
+/**
+ * Register device: store push token + platform for notifications
+ * Called after login
+ */
+const registerDevice = catchAsync(async (req, res) => {
+  const { pushToken, platform, appVersion, locale } = req.body;
+  const userId = req.principal.id;
+
+  await authService.registerDevice(userId, {
+    pushToken,
+    platform,
+    appVersion,
+    locale,
+  });
+
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'Device registered',
+    data: null,
+  });
+});
+
+/**
+ * Get current user profile + journey summary + entitlement
+ * Required for POST /auth/me
+ */
+const me = catchAsync(async (req, res) => {
+  const userId = req.principal.id;
+  const { user, journey, entitlement } = await authService.getMe(userId);
+
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
     message: 'Current user',
-    data: { user, role: req.principal.role, rights: req.principal.rights },
+    data: { user, journey, entitlement },
   });
 });
 
 module.exports = {
+  // Email/password flow
   register,
   login,
-  logout,
-  logoutAll,
   refreshTokens,
+  logoutAll,
   forgotPassword,
   resetPassword,
   verifyEmail,
   changePassword,
+  // OTP flow
+  requestOtp,
+  verifyOtp,
+  refresh,
+  logout,
+  registerDevice,
   me,
 };

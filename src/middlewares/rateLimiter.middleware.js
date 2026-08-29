@@ -39,4 +39,14 @@ const authLimiter = buildLimiter({
   message: 'Too many authentication attempts. Please try again later.',
 });
 
-module.exports = { generalLimiter, authLimiter, buildLimiter };
+/**
+ * OTP limiter: 5 attempts per 15 min per phone (per CLAUDE.md §4)
+ */
+const otpLimiter = buildLimiter({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  skipSuccessfulRequests: false,
+  message: 'Too many OTP attempts. Please try again in 15 minutes.',
+});
+
+module.exports = { generalLimiter, authLimiter, otpLimiter, buildLimiter };

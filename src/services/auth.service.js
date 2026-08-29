@@ -184,6 +184,83 @@ const changePassword = async (userId, currentPassword, newPassword) => {
   await tokenService.revokeAllUserTokens(user.id);
 };
 
+/**
+ * OTP auth: request 6-digit code (5-min TTL, max 5 attempts)
+ * TODO: integrate SMS provider (Twilio, AWS SNS, etc.)
+ */
+const requestOtp = async (phone, locale, meta = {}) => {
+  // TODO: validate phone format (E.164)
+  // TODO: check rate limit (5 per 15 min per phone)
+  // TODO: check lockout (15 min after 5 failed attempts on phone + IP)
+  // TODO: send OTP code via SMS
+  // TODO: store OTP challenge in Redis/DB with 5-min TTL
+
+  const challengeId = require('uuid').v4();
+  const expiresIn = 300; // 5 minutes
+
+  return { challengeId, expiresIn };
+};
+
+/**
+ * OTP verify: exchange challenge + code for tokens
+ * Returns tokens + isNewUser flag for first-time signup
+ */
+const verifyOtp = async (challengeId, code, meta = {}) => {
+  // TODO: retrieve OTP challenge from Redis/DB
+  // TODO: verify code matches (constant-time comparison)
+  // TODO: check attempt count, enforce lockout
+  // TODO: find or create user by phone
+  // TODO: generate rotating refresh token pair
+
+  const user = { id: 'stub-user-id', phone: '+966501234567', firstName: 'Test' };
+  const tokens = await tokenService.generateAuthTokens(user, meta);
+  const isNewUser = false; // TODO: detect actual new users
+
+  return { user, tokens, isNewUser };
+};
+
+/**
+ * Refresh: rotated refresh tokens (single-use)
+ * Reuse detection revokes whole device family + logs security event
+ */
+const refresh = async (refreshToken, meta = {}) => {
+  // TODO: verify refresh token signature
+  // TODO: check reuse (token already consumed) → revoke family + log
+  // TODO: retrieve user, verify active
+  // TODO: issue new token pair
+
+  const user = { id: 'stub-user-id', phone: '+966501234567', firstName: 'Test' };
+  const tokens = await tokenService.generateAuthTokens(user, meta);
+
+  return { tokens };
+};
+
+/**
+ * Register device: store push token + platform for notifications
+ */
+const registerDevice = async (userId, { pushToken, platform, appVersion, locale }) => {
+  // TODO: validate pushToken format
+  // TODO: store in user.pushTokens[] or separate PushToken table
+  // TODO: tag device by platform + version for targeted notifications
+
+  return { success: true };
+};
+
+/**
+ * Get auth context: user + journey + entitlement
+ */
+const getMe = async (userId) => {
+  // TODO: fetch user by id
+  // TODO: fetch journey (type, season_id, departure_date, daysUntilDeparture)
+  // TODO: fetch current entitlement (active pass, expires_at, source, features[])
+
+  const user = { id: userId, phone: '+966501234567', firstName: 'Test' };
+  const journey = { type: 'HAJJ', seasonId: null, daysUntilDeparture: null };
+  const entitlement = { active: false, seasonCode: null, expiresAt: null, source: null };
+
+  return { user, journey, entitlement };
+};
+
 module.exports = {
   register,
   loginUserWithEmailAndPassword,
@@ -194,4 +271,9 @@ module.exports = {
   resetPassword,
   verifyEmail,
   changePassword,
+  requestOtp,
+  verifyOtp,
+  refresh,
+  registerDevice,
+  getMe,
 };

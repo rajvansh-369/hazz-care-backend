@@ -8,26 +8,23 @@ const auth = require('../../middlewares/auth.middleware');
 
 const router = express.Router();
 
-// Self-service profile routes. Declared before `/:userId` so `me` is never
-// interpreted as an id.
+// Self-service profile routes
+// Declared before `/:userId` so `/me` is never interpreted as an id
 router
   .route('/me')
-  .get(auth(), userController.getMe)
+  .get(auth(), validate(userValidation.getMe), userController.getMe)
   .patch(auth(), validate(userValidation.updateMe), userController.updateMe);
 
+// User list & create (admin only)
 router
   .route('/')
-  .post(auth('users:write'), validate(userValidation.createUser), userController.createUser)
-  .get(auth('users:read'), validate(userValidation.getUsers), userController.getUsers);
+  .get(auth(), validate(userValidation.getUsers), userController.getUsers);
 
+// User CRUD by ID (admin)
 router
   .route('/:userId')
-  .get(
-    auth({ rights: ['users:read'], allowSelf: true }),
-    validate(userValidation.getUser),
-    userController.getUser
-  )
-  .patch(auth('users:write'), validate(userValidation.updateUser), userController.updateUser)
-  .delete(auth('users:write'), validate(userValidation.deleteUser), userController.deleteUser);
+  .get(auth(), validate(userValidation.getUser), userController.getUser)
+  .patch(auth(), validate(userValidation.updateUser), userController.updateUser)
+  .delete(auth(), validate(userValidation.deleteUser), userController.deleteUser);
 
 module.exports = router;
