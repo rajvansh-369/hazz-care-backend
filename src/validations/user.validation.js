@@ -1,61 +1,94 @@
 'use strict';
 
 const Joi = require('joi');
-const { objectId, password } = require('./custom.validation');
-const { roles } = require('../config/roles');
+const { objectId } = require('./custom.validation');
 
-const createUser = {
-  body: Joi.object().keys({
-    name: Joi.string().trim().min(2).max(80).required(),
-    email: Joi.string().trim().lowercase().email().max(254).required(),
-    password: Joi.string().max(128).custom(password).required(),
-    role: Joi.string().valid(...roles),
-    isActive: Joi.boolean(),
-  }),
-};
+// E.164 format: +[country_code][number]
+const phone = Joi.string()
+  .pattern(/^\+\d{1,3}\d{4,14}$/)
+  .messages({ 'string.pattern.base': 'Phone must be in E.164 format (e.g., +966501234567)' });
 
-const getUsers = {
-  query: Joi.object().keys({
-    name: Joi.string().trim().max(80),
-    email: Joi.string().trim().lowercase().max(254),
-    role: Joi.string().valid(...roles),
-    isActive: Joi.boolean(),
-    sortBy: Joi.string().max(60),
-    limit: Joi.number().integer().min(1).max(100),
-    page: Joi.number().integer().min(1),
-  }),
-};
+const locale = Joi.string().valid('en', 'ar', 'ur', 'id', 'fr', 'bn', 'tr');
 
-const getUser = {
-  params: Joi.object().keys({
-    userId: Joi.string().custom(objectId).required(),
-  }),
-};
+const gender = Joi.string().valid('male', 'female', 'other');
 
-const updateUser = {
-  params: Joi.object().keys({
-    userId: Joi.string().custom(objectId).required(),
-  }),
-  body: Joi.object()
-    .keys({
-      name: Joi.string().trim().min(2).max(80),
-      email: Joi.string().trim().lowercase().email().max(254),
-      password: Joi.string().max(128).custom(password),
-      role: Joi.string().valid(...roles),
-      isActive: Joi.boolean(),
-    })
-    .min(1),
-};
+const countryCode = Joi.string().length(2).uppercase(); // ISO 3166-1 alpha-2
 
+const getMe = {};
+
+/**
+ * Update self-profile: allowed fields only
+ * Cannot change phone (unique, auth-scoped)
+ */
 const updateMe = {
   body: Joi.object()
     .keys({
-      name: Joi.string().trim().min(2).max(80),
+      firstName: Joi.string().trim().max(80),
+      lastName: Joi.string().trim().max(80),
       email: Joi.string().trim().lowercase().email().max(254),
+      dob: Joi.date().max('now'),
+      gender: gender,
+      locale: locale,
+      countryCode: countryCode,
     })
     .min(1),
 };
 
-const deleteUser = getUser;
+/**
+ * List users: cursor-based pagination per CLAUDE.md §2
+ */
+const getUsers = {
+  query: Joi.object().keys({
+    cursor: Joi.string().max(512), // opaque pagination token
+    limit: Joi.number().integer().min(1).max(100).default(50),
+  }),
+};
 
-module.exports = { createUser, getUsers, getUser, updateUser, updateMe, deleteUser };
+/**
+ * Get single user by ID
+ */
+const getUser = {
+  params: Joi.object().keys({
+    userId: Joi.string().uuid().required(),
+  }),
+};
+
+/**
+ * Update user (admin)
+ * Can update most fields except phone (unique key)
+ */
+const updateUser = {
+  params: Joi.object().keys({
+    userId: Joi.string().uuid().required(),
+  }),
+  body: Joi.object()
+    .keys({
+      firstName: Joi.string().trim().max(80),
+      lastName: Joi.string().trim().max(80),
+      email: Joi.string().trim().lowercase().email().max(254),
+      dob: Joi.date().max('now'),
+      gender: gender,
+      locale: locale,
+      countryCode: countryCode,
+      status: Joi.string().valid('active', 'inactive', 'suspended'),
+    })
+    .min(1),
+};
+
+/**
+ * Delete user
+ */
+const deleteUser = {
+  params: Joi.object().keys({
+    userId: Joi.string().uuid().required(),
+  }),
+};
+
+module.exports = {
+  getMe,
+  updateMe,
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
+};

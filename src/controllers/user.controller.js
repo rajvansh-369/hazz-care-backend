@@ -6,54 +6,92 @@ const pick = require('../utils/pick');
 const ApiResponse = require('../utils/ApiResponse');
 const httpStatus = require('../utils/httpStatus');
 
-const createUser = catchAsync(async (req, res) => {
-  const user = await userService.createUser(req.body);
+/**
+ * Get current user profile (self-service)
+ */
+const getMe = catchAsync(async (req, res) => {
+  const user = await userService.getUserByIdOrFail(req.principal.id);
   return ApiResponse.send(res, {
-    statusCode: httpStatus.CREATED,
-    message: 'User created',
+    statusCode: httpStatus.OK,
+    message: 'Profile retrieved',
     data: { user },
   });
 });
 
-const getUsers = catchAsync(async (req, res) => {
-  const filter = pick(req.query, ['name', 'email', 'role', 'isActive']);
-  const options = pick(req.query, ['sortBy', 'limit', 'page']);
-  const result = await userService.queryUsers(filter, options);
+/**
+ * Update current user profile (self-service)
+ * Allowed fields: firstName, lastName, email, dob, gender, locale, countryCode
+ */
+const updateMe = catchAsync(async (req, res) => {
+  const allowedFields = ['firstName', 'lastName', 'email', 'dob', 'gender', 'locale', 'countryCode'];
+  const updates = pick(req.body, allowedFields);
+  const user = await userService.updateUserById(req.principal.id, updates);
+
   return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'Profile updated',
+    data: { user },
+  });
+});
+
+/**
+ * List users (admin only)
+ * Cursor-based pagination per CLAUDE.md §2
+ */
+const getUsers = catchAsync(async (req, res) => {
+  const { cursor, limit } = pick(req.query, ['cursor', 'limit']);
+  const result = await userService.queryUsers({ cursor, limit });
+
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
     message: 'Users retrieved',
-    data: result.results,
+    data: result.data,
     meta: {
-      page: result.page,
-      limit: result.limit,
-      totalPages: result.totalPages,
-      totalResults: result.totalResults,
+      nextCursor: result.nextCursor,
+      requestId: req.requestId,
     },
   });
 });
 
+/**
+ * Get user by ID (admin or self)
+ */
 const getUser = catchAsync(async (req, res) => {
   const user = await userService.getUserByIdOrFail(req.params.userId);
-  return ApiResponse.send(res, { message: 'User retrieved', data: { user } });
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'User retrieved',
+    data: { user },
+  });
 });
 
+/**
+ * Update user (admin only)
+ * Can update: firstName, lastName, email, status, locale, countryCode, etc.
+ */
 const updateUser = catchAsync(async (req, res) => {
   const user = await userService.updateUserById(req.params.userId, req.body);
-  return ApiResponse.send(res, { message: 'User updated', data: { user } });
+  return ApiResponse.send(res, {
+    statusCode: httpStatus.OK,
+    message: 'User updated',
+    data: { user },
+  });
 });
 
+/**
+ * Delete user (admin only)
+ * Soft delete: sets deleted_at, preserves audit trail
+ */
 const deleteUser = catchAsync(async (req, res) => {
   await userService.deleteUserById(req.params.userId);
   return res.status(httpStatus.NO_CONTENT).send();
 });
 
-const getMe = catchAsync(async (req, res) => {
-  const user = await userService.getUserByIdOrFail(req.principal.id);
-  return ApiResponse.send(res, { message: 'Profile retrieved', data: { user } });
-});
-
-const updateMe = catchAsync(async (req, res) => {
-  const user = await userService.updateUserById(req.principal.id, req.body);
-  return ApiResponse.send(res, { message: 'Profile updated', data: { user } });
-});
-
-module.exports = { createUser, getUsers, getUser, updateUser, deleteUser, getMe, updateMe };
+module.exports = {
+  getMe,
+  updateMe,
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
+};

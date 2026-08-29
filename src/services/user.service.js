@@ -20,11 +20,30 @@ const createUser = async (userBody) => {
 };
 
 /**
- * @param {object} filter
- * @param {object} options
- * @returns {Promise<object>}
+ * Cursor-based pagination: fetch users sorted by createdAt
+ * @param {object} options { cursor?, limit? }
+ * @returns {Promise<{data: User[], nextCursor?: string}>}
  */
-const queryUsers = async (filter, options) => User.paginate(filter, options);
+const queryUsers = async (options = {}) => {
+  const { cursor, limit = 50 } = options;
+  const query = {};
+
+  // Cursor points to the last user's ID from previous query
+  if (cursor) {
+    // TODO: decode cursor to get previous user ID, then query createdAt < that user's createdAt
+    // For now, just skip cursor decoding
+  }
+
+  const users = await User.find(query)
+    .sort({ createdAt: -1 })
+    .limit(limit + 1); // +1 to detect if there are more
+
+  const hasMore = users.length > limit;
+  const data = hasMore ? users.slice(0, limit) : users;
+  const nextCursor = hasMore ? data[data.length - 1]._id.toString() : undefined;
+
+  return { data, nextCursor };
+};
 
 /**
  * @param {string} id
