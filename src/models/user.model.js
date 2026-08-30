@@ -18,6 +18,16 @@ const userSchema = new mongoose.Schema(
       minlength: [2, 'Name must be at least 2 characters'],
       maxlength: [80, 'Name must be at most 80 characters'],
     },
+    firstName: {
+      type: String,
+      trim: true,
+      maxlength: [40, 'First name must be at most 40 characters'],
+    },
+    lastName: {
+      type: String,
+      trim: true,
+      maxlength: [40, 'Last name must be at most 40 characters'],
+    },
     email: {
       type: String,
       required: [true, 'Email is required'],
@@ -29,6 +39,57 @@ const userSchema = new mongoose.Schema(
         validator: (value) => EMAIL_REGEX.test(value),
         message: 'Email must be a valid email address',
       },
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: [20, 'Phone must be at most 20 characters'],
+    },
+    dob: {
+      type: Date,
+      default: null,
+    },
+    gender: {
+      type: String,
+      enum: {
+        values: ['male', 'female', 'other'],
+        message: 'Gender must be one of: male, female, other',
+      },
+      default: null,
+    },
+    countryCode: {
+      type: String,
+      trim: true,
+      maxlength: [2, 'Country code must be at most 2 characters'],
+      default: null,
+    },
+    locale: {
+      type: String,
+      enum: {
+        values: ['en', 'ar', 'ur', 'id', 'fr', 'bn', 'tr'],
+        message: 'Locale must be one of: en, ar, ur, id, fr, bn, tr',
+      },
+      default: 'en',
+    },
+    bloodType: {
+      type: String,
+      enum: {
+        values: ['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'],
+        message: 'Blood type must be valid',
+      },
+      default: null,
+    },
+    heightCm: {
+      type: Number,
+      min: [50, 'Height must be at least 50 cm'],
+      max: [250, 'Height must be at most 250 cm'],
+      default: null,
+    },
+    weightKg: {
+      type: Number,
+      min: [20, 'Weight must be at least 20 kg'],
+      max: [300, 'Weight must be at most 300 kg'],
+      default: null,
     },
     password: {
       type: String,
