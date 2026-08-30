@@ -90,8 +90,9 @@ seven languages. The server does **not** localize error text for the client.
 4. **Never `429` on `/auth/login`.** The client's 429 copy reads *"wait, then ask for a new
    code"* — written for the OTP screen, nonsense on a sign-in form.
 
-Guard these in `errorHandler.ts`, not by remembering. Prisma's `P2025` must not map to 404 and
-`P2002` must not map to 409 under `/auth`.
+Guard these in error middleware, not by remembering. Mongoose's E11000 (duplicate key) must not
+map to 409 except for duplicate email on register. Mongoose's CastError (malformed ObjectId) must
+not map to 404 under `/auth` — map both to 400 instead. See §A8 for details.
 
 ## A4. Auth model — email and password
 
@@ -249,22 +250,63 @@ Mount per-route, never on the router, so a future route cannot silently inherit 
 
 ## A8. Layer A data model
 
+Mongoose collections (MongoDB):
+
 ```
-User                 id (uuid string), email (unique, lowercased), passwordHash,
-                     fullName?, emailVerified (default true), createdAt
-RefreshToken         tokenHash (sha256, unique), userId, expiresAt (+60d),
-                     revokedAt?, replacedBy?   ← replacedBy powers the 60s grace window
-PasswordResetOtp     email, codeHash, expiresAt, attempts, lockedUntil?, consumedAt?
-                     ← keyed by EMAIL, not userId: the flow must work for unknown addresses
-PasswordResetToken   tokenHash (unique), userId, expiresAt, usedAt?
-RevenueCatEvent      eventId (PRIMARY KEY = idempotency key), type, appUserId, raw, receivedAt
-Entitlement          userId, productId, grantedAt, revokedAt?
-                     ← NO expiresAt column. Forbidden.
+User                 email (unique, lowercase: true), passwordHash,
+                     fullName?, emailVerified (default: true), timestamps
+Token                tokenHash (unique index), user (ObjectId ref),
+                     type ('refresh' | 'resetPassword'),
+                     expiresAt, revokedAt?, replacedBy?
+PasswordResetOtp     email (indexed), codeHash, expiresAt, attempts (default: 0),
+                     lockedUntil?, consumedAt?
+RevenueCatEvent      _id (set to event.id directly), type, appUserId,
+                     raw (Mixed), receivedAt
+Entitlement          user (unique), productId, grantedAt, revokedAt?
 ```
 
-Store hashes, never raw tokens or raw OTP codes. Password hashing: argon2id, **min 8 chars, no
-maximum, no composition rules, no truncation.** A server stricter than the client turns an
-inline rule the pilgrim could have followed into an opaque server error.
+### Critical Mongoose-specific rules
+
+**`user.id` must serialise as a string.** Mongoose's `_id` is an ObjectId; the `toJSON` transform
+mapping `_id` → `id` (and stripping `__v` and `passwordHash`) is load-bearing, not cosmetic.
+It must produce a JSON string on register, login, refresh and `/auth/me`, identical across all four.
+The client's parser fails on a bare integer.
+
+**Four things MongoDB does differently:**
+
+1. **Reset-password needs a transaction.** Three writes must be atomic: mark the reset token used,
+   update the password hash, revoke all of that user's refresh tokens. A crash between writes two
+   and three leaves the password changed and old sessions alive. MongoDB transactions require a
+   replica set — a standalone mongod will not do it. A single-node replica set is enough
+   (`--replSet rs0` plus `rs.initiate()`); use it in dev and CI, not only production.
+
+2. **E11000 must not become a blanket 409.** Mongoose throws the same duplicate-key error for every
+   unique index. Map it to `409 email_taken` ONLY for a duplicate email on register. Any other
+   E11000 under `/auth` — including `Token.tokenHash` and `RevenueCatEvent._id` — must not surface
+   as 409, because the client renders any 409 as *"That email already has an account."*
+
+3. **CastError must not become a 404.** A malformed ObjectId throws a Mongoose CastError, which many
+   boilerplates map to 404. Under `/auth` that renders as *"We could not find an account for that
+   email address."* Map it to 400 instead.
+
+4. **TTL indexes are the cheap win.** Use `expireAfterSeconds` on `PasswordResetOtp.expiresAt` and on
+   expired `Token` documents to remove the need for a cleanup job. TTL deletion is lazy (MongoDB
+   sweeps roughly once a minute), so never rely on it for correctness — always check `expiresAt`
+   in code as well. It is garbage collection, not an expiry mechanism.
+
+### Annotations
+
+- **`replacedBy` and `revokedAt` on Token are REQUIRED** for the 60-second rotation grace window.
+  The current `auth.service.js` deletes the old token outright; that is the bug.
+- **PasswordResetOtp is keyed by EMAIL, not user,** so the flow behaves identically for addresses
+  with no account.
+- **`RevenueCatEvent._id = event.id` means idempotency comes free** from the primary key; a retry
+  is an E11000 we drop.
+- **Entitlement has NO `expiresAt` field. Forbidden.** The pass is lifetime.
+- **Store only hashes:** never a raw refresh token, reset token, or OTP code.
+- **Password hashing:** bcrypt or argon2id, **min 8 characters, no maximum, no composition rules,
+  no truncation.** A server stricter than the client turns an inline rule the pilgrim could have
+  followed into an opaque server error.
 
 ## A9. Layer A definition of done
 
@@ -369,15 +411,19 @@ either side hardcodes:
 ## C1. Stack
 
 ```
-Runtime      Node.js 20 LTS (ESM)
-Language     TypeScript, strict: true
+Runtime      Node.js 20 LTS
+Language     JavaScript (CommonJS, as the existing boilerplate uses)
 Framework    Express 4 (thin) — logic in services, not routes
-DB           PostgreSQL 15 + Prisma
+DB           MongoDB + Mongoose 8, running as a single-node replica set
 Cache/Queue  Redis 7 + BullMQ
-Validation   Zod (schema per endpoint)
-Logging      Pino (JSON, redaction list — see C3)
-Testing      Vitest + Supertest, Testcontainers for Postgres/Redis
+Validation   Joi (already wired via the validate middleware)
+Logging      Winston/Pino as the boilerplate ships, with the redaction list in §C3
+Testing      Jest + Supertest + mongodb-memory-server
 ```
+
+**Stack decision made 2026-08-30:** This supersedes the prior TypeScript + PostgreSQL + Prisma
+specification. The decision was deliberate — the boilerplate is production-grade JavaScript on
+Mongoose, and nothing in Layer A's contract depends on the language or ORM choice (see BACKEND_SPEC.md §2).
 
 Redis/BullMQ is justified in Layer A for exactly two things: enqueuing the reset email so
 `forgot-password` never awaits SMTP, and processing RevenueCat events off the HTTP path.
