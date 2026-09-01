@@ -39,6 +39,9 @@ const tokenSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// TTL index: MongoDB deletes documents when expiresAt passes (expireAfterSeconds: 0 = immediate).
+// CRITICAL: TTL deletion is lazy — MongoDB sweeps roughly once per minute. Code MUST check
+// expiresAt explicitly in memory; TTL is garbage collection only, not the expiry mechanism.
 tokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 tokenSchema.plugin(toJSON);
