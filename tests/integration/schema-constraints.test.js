@@ -205,6 +205,35 @@ describe('Schema Constraints (E11000 Duplicate Key)', () => {
     });
   });
 
+  describe('RevenueCatEvent model: _id uniqueness (idempotency)', () => {
+    it('should throw E11000 on duplicate _id (RevenueCat retry)', async () => {
+      const { RevenueCatEvent } = require('../../src/models');
+      const eventId = 'rc_event_' + Date.now();
+
+      // First insert succeeds (webhook received)
+      await RevenueCatEvent.create({
+        _id: eventId,
+        type: 'INITIAL_PURCHASE',
+        appUserId: 'user123',
+        raw: { test: true },
+      });
+
+      // Second insert with same _id throws E11000 (webhook retried)
+      try {
+        await RevenueCatEvent.create({
+          _id: eventId,
+          type: 'INITIAL_PURCHASE',
+          appUserId: 'user123',
+          raw: { test: true },
+        });
+        fail('Should have thrown E11000');
+      } catch (error) {
+        // E11000 means already processed; service drops it
+        expect(error.code).toBe(11000);
+      }
+    });
+  });
+
   describe('PasswordResetOtp model: codeHash unique index', () => {
     it('should throw E11000 on duplicate codeHash', async () => {
       const codeHash = 'xyz789abc';
