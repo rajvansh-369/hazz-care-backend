@@ -1,19 +1,14 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const { tokenTypes } = require('../config');
 const { toJSON } = require('./plugins');
 
-/**
- * Refresh / reset / verification tokens are persisted as SHA-256 hashes so a
- * database leak cannot be replayed against the API.
- */
 const tokenSchema = new mongoose.Schema(
   {
-    token: {
+    tokenHash: {
       type: String,
       required: true,
-      index: true,
+      unique: true,
       private: true,
     },
     user: {
@@ -24,22 +19,27 @@ const tokenSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: Object.values(tokenTypes),
+      enum: ['refresh', 'resetPassword'],
       required: true,
     },
-    expires: {
+    expiresAt: {
       type: Date,
       required: true,
     },
-    blacklisted: {
-      type: Boolean,
-      default: false,
+    revokedAt: {
+      type: Date,
+      default: null,
     },
-    ip: { type: String, default: null },
-    userAgent: { type: String, default: null },
+    replacedBy: {
+      type: mongoose.SchemaTypes.ObjectId,
+      ref: 'Token',
+      default: null,
+    },
   },
   { timestamps: true }
 );
+
+tokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 tokenSchema.plugin(toJSON);
 

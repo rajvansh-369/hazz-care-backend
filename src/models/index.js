@@ -3,5 +3,7 @@
 module.exports = {
   User: require('./user.model'),
   Token: require('./token.model'),
-  Task: require('./task.model'),
+  PasswordResetOtp: require('./passwordResetOtp.model'),
+  RevenueCatEvent: require('./revenueCatEvent.model'),
+  Entitlement: require('./entitlement.model'),
 };
