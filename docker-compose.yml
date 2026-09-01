@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     environment:
       MONGO_INITDB_DATABASE: node-mongo-boilerplate
+    command: ['--replSet', 'rs0', '--bind_ip_all']
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -12,6 +13,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: >
+      mongosh --host mongo:27017 --eval
+      "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] })"
+    restart: on-failure
 
   api:
     build: .
@@ -22,14 +33,15 @@ services:
       PORT: 5000
       SERVICE_NAME: core-service
       MONGODB_URL: mongodb://mongo:27017/node-mongo-boilerplate
+      MONGODB_REPLICA_SET: rs0
       # Override every secret at deploy time; this value is a placeholder.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env before composing}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       TRUST_PROXY: 1
       LOG_LEVEL: info
     depends_on:
-      mongo:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     expose:
       - '5000'
 
@@ -43,6 +55,7 @@ services:
       GATEWAY_PORT: 8080
       SERVICE_NAME: api-gateway
       MONGODB_URL: mongodb://mongo:27017/node-mongo-boilerplate
+      MONGODB_REPLICA_SET: rs0
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env before composing}
       CORE_SERVICE_URL: http://api:5000
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
