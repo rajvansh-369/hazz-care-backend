@@ -2,32 +2,10 @@
 
 const rateLimit = require('express-rate-limit');
 const config = require('../config/config');
-const ApiError = require('../utils/ApiError');
 const errorCodes = require('../utils/errorCodes');
 const { sendJson } = require('../utils/respond');
 
 const HOUR_MS = 60 * 60 * 1000;
-
-const buildLimiter = ({ windowMs, max, skipSuccessfulRequests = false }) =>
-  rateLimit({
-    windowMs,
-    limit: max,
-    skipSuccessfulRequests,
-    standardHeaders: 'draft-7',
-    legacyHeaders: false,
-    // Rate limiting is a transport concern; disable it entirely under test so
-    // suites stay deterministic no matter how many requests they fire.
-    skip: () => config.isTest,
-    handler: (req, res, next) => {
-      next(ApiError.tooManyAttempts());
-    },
-  });
-
-const otpLimiter = buildLimiter({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  skipSuccessfulRequests: false,
-});
 
 /**
  * Per-IP limiter factory for the auth routes that may be limited (CLAUDE.md A7):
@@ -64,18 +42,12 @@ const createIpLimiter = ({
     handler: (req, res) => sendJson(res, 429, { code: errorCodes.too_many_attempts }),
   });
 
-/** Kept for the refresh tests and call sites that name it. */
-const createRefreshLimiter = createIpLimiter;
-
 const refreshLimiter = createIpLimiter();
 const forgotPasswordLimiter = createIpLimiter();
 const verifyOtpLimiter = createIpLimiter();
 
 module.exports = {
-  otpLimiter,
-  buildLimiter,
   createIpLimiter,
-  createRefreshLimiter,
   refreshLimiter,
   forgotPasswordLimiter,
   verifyOtpLimiter,

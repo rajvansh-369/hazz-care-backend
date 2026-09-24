@@ -3,8 +3,6 @@
 const ApiError = require('../../src/utils/ApiError');
 const errorCodes = require('../../src/utils/errorCodes');
 const catchAsync = require('../../src/utils/catchAsync');
-const pick = require('../../src/utils/pick');
-const httpStatus = require('../../src/utils/httpStatus');
 const { sendJson, sendNoContent } = require('../../src/utils/respond');
 
 describe('errorCodes', () => {
@@ -36,15 +34,11 @@ describe('ApiError', () => {
     ['invalidCredentials', 401, 'invalid_credentials', []],
     ['passwordTooShort', 422, 'invalid_input', [{ field: 'password', code: 'password_too_short' }]],
     ['emailInvalid', 422, 'invalid_input', [{ field: 'email', code: 'email_invalid' }]],
-    ['invalidInput', 400, 'invalid_input', []],
     ['invalidOtp', 400, 'invalid_otp', [{ field: 'code', code: 'invalid_otp' }]],
     ['otpExpired', 400, 'otp_expired', [{ field: 'code', code: 'otp_expired' }]],
     ['invalidResetToken', 400, 'invalid_reset_token', [{ field: 'resetToken', code: 'invalid_reset_token' }]],
     ['tooManyAttempts', 429, 'too_many_attempts', []],
-    ['sessionRevoked', 401, 'session_revoked', []],
     ['unauthorized', 401, 'unauthorized', []],
-    ['unavailable', 503, 'unavailable', []],
-    ['notFound', 404, 'not_found', []],
   ])('%s() → %d %s', (factory, status, code, fieldErrors) => {
     const error = ApiError[factory]();
     expect(error).toBeInstanceOf(ApiError);
@@ -57,6 +51,14 @@ describe('ApiError', () => {
   test('never produces 403 or 500', () => {
     const factories = Object.getOwnPropertyNames(ApiError).filter((name) => typeof ApiError[name] === 'function');
     factories.forEach((name) => expect([403, 500]).not.toContain(ApiError[name]().status));
+  });
+
+  test('has no factory for 404, 503 or session_revoked (removed: nothing may throw them)', () => {
+    // 404 under /auth lies to the pilgrim; the refresh route sends its own 401; 503
+    // comes only from the error handler's default. A factory invites misuse.
+    ['notFound', 'unavailable', 'sessionRevoked', 'invalidInput'].forEach((name) =>
+      expect(ApiError[name]).toBeUndefined()
+    );
   });
 
   test('ignores fieldErrors that are not an array', () => {
@@ -128,30 +130,3 @@ describe('catchAsync', () => {
   });
 });
 
-describe('pick', () => {
-  test('keeps only the requested keys', () => {
-    expect(pick({ a: 1, b: 2, c: 3 }, ['a', 'c'])).toEqual({ a: 1, c: 3 });
-  });
-
-  test('drops undefined values and missing keys', () => {
-    expect(pick({ a: undefined, b: 2 }, ['a', 'b', 'z'])).toEqual({ b: 2 });
-  });
-
-  test('does not pick inherited properties', () => {
-    const parent = { inherited: 'yes' };
-    const child = Object.create(parent);
-    child.own = 'mine';
-    expect(pick(child, ['inherited', 'own'])).toEqual({ own: 'mine' });
-  });
-
-  test('tolerates a nullish source', () => {
-    expect(pick(undefined, ['a'])).toEqual({});
-  });
-});
-
-describe('httpStatus', () => {
-  test('maps codes to messages', () => {
-    expect(httpStatus.getStatusMessage(404)).toBe('Not Found');
-    expect(httpStatus.getStatusMessage(599)).toBe('Unknown Status');
-  });
-});

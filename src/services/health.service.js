@@ -4,17 +4,6 @@ const os = require('os');
 const config = require('../config/config');
 const database = require('../config/database');
 
-const startedAt = Date.now();
-
-/** Liveness: the process is up and able to answer. */
-const liveness = () => ({
-  status: 'up',
-  service: config.serviceName,
-  env: config.env,
-  uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
-  timestamp: new Date().toISOString(),
-});
-
 /** Readiness: every downstream dependency this service needs is usable. */
 const readiness = async () => {
   const dependencies = {
@@ -33,4 +22,4 @@ const readiness = async () => {
   };
 };
 
-module.exports = { liveness, readiness };
+module.exports = { readiness };

@@ -13,11 +13,8 @@ module.exports = {
   coveragePathIgnorePatterns: [
     '/node_modules/',
     '/tests/',
-    'src/docs/',
-    // Process entry points and one-shot CLI scripts: exercised by running them,
-    // not by unit tests, so they would only dilute the numbers below.
+    // The process entry point: exercised by running it, not by unit tests.
     'src/index.js',
-    'src/scripts/',
   ],
   collectCoverageFrom: ['src/**/*.js'],
   coverageReporters: ['text', 'lcov'],

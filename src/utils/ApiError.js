@@ -47,10 +47,6 @@ class ApiError extends Error {
     ]);
   }
 
-  static invalidInput() {
-    return new ApiError(400, errorCodes.invalid_input);
-  }
-
   static invalidOtp() {
     return new ApiError(400, errorCodes.invalid_otp, [
       { field: 'code', code: errorCodes.invalid_otp },
@@ -73,22 +69,8 @@ class ApiError extends Error {
     return new ApiError(429, errorCodes.too_many_attempts);
   }
 
-  /** Only `POST /auth/refresh` may use this: it signs the pilgrim out. */
-  static sessionRevoked() {
-    return new ApiError(401, errorCodes.session_revoked);
-  }
-
   static unauthorized() {
     return new ApiError(401, errorCodes.unauthorized);
-  }
-
-  static unavailable() {
-    return new ApiError(503, errorCodes.unavailable);
-  }
-
-  /** For use OUTSIDE the auth router only — a 404 under /auth lies to the pilgrim. */
-  static notFound() {
-    return new ApiError(404, errorCodes.not_found);
   }
 }
 

@@ -17,7 +17,7 @@ const logger = require('../../src/config/logger');
 const authController = require('../../src/controllers/auth.controller');
 const { errorHandler } = require('../../src/middlewares/error.middleware');
 const {
-  createRefreshLimiter,
+  createIpLimiter,
   refreshLimiter,
 } = require('../../src/middlewares/rateLimiter.middleware');
 const requestId = require('../../src/middlewares/requestId.middleware');
@@ -262,7 +262,7 @@ describe('refresh and logout', () => {
       };
 
       it('over the limit → 429 JSON {code:"too_many_attempts"}, never 401', async () => {
-        const mini = limitedApp(createRefreshLimiter({ limit: 2, skip: () => false }));
+        const mini = limitedApp(createIpLimiter({ limit: 2, skip: () => false }));
         const statuses = [];
         for (let i = 0; i < 4; i += 1) {
           // eslint-disable-next-line no-await-in-loop
@@ -289,7 +289,7 @@ describe('refresh and logout', () => {
           resetKey: async () => undefined,
         };
         const mini = limitedApp(
-          createRefreshLimiter({ limit: 1, skip: () => false, store: brokenStore })
+          createIpLimiter({ limit: 1, skip: () => false, store: brokenStore })
         );
         const session = await signUp();
         const res = await request(mini)

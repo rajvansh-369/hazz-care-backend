@@ -143,9 +143,19 @@ const errorHandler = (err, req, res, next) => {
     return sendJson(res, 503, { code: errorCodes.unavailable });
   }
 
-  // Mongoose ValidationError / CastError mean our own validation missed something.
-  if (err && (err.name === 'ValidationError' || err.name === 'CastError')) {
-    logUnexpected(req, err, `Unhandled Mongoose ${err.name}`);
+  // A CastError is malformed input (an id that is not an ObjectId): 400, never the
+  // 404 many boilerplates use — under /auth a 404 reads as "no account for that
+  // email" (CLAUDE.md A3, A8 point 3). Logged, because a validator should have
+  // caught it first.
+  if (err && err.name === 'CastError') {
+    logUnexpected(req, err, 'Unhandled Mongoose CastError');
+    return sendJson(res, 400, { code: errorCodes.invalid_input });
+  }
+
+  // A ValidationError means our own validation let through something the schema
+  // refuses: a server bug, not the pilgrim's input.
+  if (err && err.name === 'ValidationError') {
+    logUnexpected(req, err, 'Unhandled Mongoose ValidationError');
     return sendJson(res, 503, { code: errorCodes.unavailable });
   }
 

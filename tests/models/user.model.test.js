@@ -113,8 +113,8 @@ describe('User Model', () => {
   });
 
   describe('Statics', () => {
-    it('has isEmailTaken', () => {
-      expect(User.isEmailTaken).toBeDefined();
+    it('has no isEmailTaken: duplicates are detected only by the unique index (CLAUDE.md A11)', () => {
+      expect(User.isEmailTaken).toBeUndefined();
     });
   });
 });

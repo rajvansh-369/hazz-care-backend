@@ -362,7 +362,8 @@ The client's parser fails on a bare integer.
 ### Annotations
 
 - **`replacedBy` and `revokedAt` on Token are REQUIRED** for the 60-second rotation grace window.
-  The current `auth.service.js` deletes the old token outright; that is the bug. The window must
+  `token.service.js` keeps the old token (revoked as `ROTATED`, with `rotatedAt`) rather than
+  deleting it, which is what the grace window reads. The window must
   be time-bounded from the moment of rotation (§A10 rule l).
 - **PasswordResetOtp is looked up by EMAIL,** the only thing verify-otp receives. `user` records
   the account a code was issued for; codes are only issued for real accounts, so an unknown
@@ -558,7 +559,9 @@ Runtime      Node.js 20 LTS
 Language     JavaScript (CommonJS, as the existing boilerplate uses)
 Framework    Express 4 (thin) — logic in services, not routes
 DB           MongoDB + Mongoose 8, running as a single-node replica set
-Validation   Joi (already wired via the validate middleware)
+Validation   Joi for config (src/config/config.js). Auth requests use explicit validators in
+             src/validations/auth.validation.js — there is no generic validate middleware (it
+             would turn every failure into a generic 400 and lose the client's field codes)
 Logging      winston (with a redaction format) + morgan (request line only, never bodies)
 Testing      Jest + Supertest + mongodb-memory-server; suites that need transactions use
              MongoMemoryReplSet (tests/utils/setupTestDB.js)

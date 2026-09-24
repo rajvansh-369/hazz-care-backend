@@ -56,8 +56,13 @@ const throwingApp = () => {
     error.name = 'ValidationError';
     throw error;
   });
+  mini.post(`${AUTH}/boom-cast`, () => {
+    const error = new Error('Cast to ObjectId failed for value "abc" (type string) at path "_id"');
+    error.name = 'CastError';
+    throw error;
+  });
   mini.post(`${AUTH}/boom-404`, () => {
-    throw ApiError.notFound();
+    throw new ApiError(404, 'not_found');
   });
   mini.post(`${AUTH}/register`, () => {
     throw ApiError.unauthorized();
@@ -126,6 +131,12 @@ describe('wiring contract', () => {
       const res = await request(mini).post(`${AUTH}/boom-duplicate`).then(track);
       expect(res.status).toBe(503);
       expect(res.body).toEqual({ code: 'unavailable' });
+    });
+
+    test('a Mongoose CastError → 400 invalid_input, never 404 or 503 (CLAUDE.md A3, A8.3)', async () => {
+      const res = await request(mini).post(`${AUTH}/boom-cast`).then(track);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ code: 'invalid_input' });
     });
 
     test('a Mongoose ValidationError → 503', async () => {

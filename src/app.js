@@ -18,6 +18,14 @@ const app = express();
 // parser. No redirects anywhere, no static files.
 app.disable('x-powered-by');
 app.set('etag', false);
+// Disabling ETags is not enough: Express still answers 304 to `If-None-Match: *`
+// on a GET (e.g. /auth/me), because `*` matches without an ETag. Conditional
+// requests are never honoured here, so drop the headers before anything reads them.
+app.use((req, res, next) => {
+  delete req.headers['if-none-match'];
+  delete req.headers['if-modified-since'];
+  next();
+});
 // Honour X-Forwarded-* from exactly `trustProxy` hops (0 = no reverse proxy).
 app.set('trust proxy', config.trustProxy);
 

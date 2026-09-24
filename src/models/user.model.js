@@ -60,14 +60,6 @@ const userSchema = new mongoose.Schema(
 
 userSchema.plugin(toJSON);
 
-userSchema.statics.isEmailTaken = async function isEmailTaken(email, excludeUserId) {
-  const user = await this.findOne({ email: String(email).toLowerCase() }).select('_id');
-  if (!user) {
-    return false;
-  }
-  return String(user._id) !== String(excludeUserId || '');
-};
-
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;

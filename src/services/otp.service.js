@@ -7,7 +7,6 @@ const { PasswordResetOtp } = require('../models');
 
 const HOUR_MS = 60 * 60 * 1000;
 const PURGE_AFTER_MS = 24 * HOUR_MS;
-const CODE_SPACE = 10 ** 6;
 
 const normaliseEmail = (email) => String(email).trim().toLowerCase();
 
@@ -37,7 +36,8 @@ const createOtpService = ({ now = () => new Date() } = {}) => {
   const maxAttempts = config.otp.maxAttempts;
 
   /** Six ASCII digits, uniformly random, leading zeros kept. */
-  const generateCode = () => String(crypto.randomInt(0, CODE_SPACE)).padStart(config.otp.length, '0');
+  const codeSpace = 10 ** config.otp.length;
+  const generateCode = () => String(crypto.randomInt(0, codeSpace)).padStart(config.otp.length, '0');
 
   /**
    * Voids every active code for the address and stores a fresh one at zero attempts,

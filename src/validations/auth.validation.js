@@ -108,7 +108,9 @@ const forgotPassword = (body) => {
   return { email: normaliseEmail(email) };
 };
 
-const OTP_CODE_PATTERN = /^[0-9]{6}$/;
+// Exactly OTP_LENGTH ASCII digits (pinned to 6 by config).
+// eslint-disable-next-line security/detect-non-literal-regexp -- built from a validated integer
+const OTP_CODE_PATTERN = new RegExp(`^[0-9]{${config.otp.length}}$`);
 
 /**
  * Rejected here, before the OTP service, so a malformed request consumes no attempt.
