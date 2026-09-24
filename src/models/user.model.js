@@ -1,12 +1,18 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const config = require('../config/config');
 const { toJSON } = require('./plugins');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+/**
+ * The account. `id` (from `_id` via the toJSON plugin) is the primary key of the
+ * pilgrim's local database on the device, so it must serialise as the same non-empty
+ * string forever (CLAUDE.md A4, A10 rule c).
+ *
+ * Password hashing lives in services/password.service.js, never in a hook: a pre-save
+ * hook double-hashes on updates (CLAUDE.md A11).
+ */
 const userSchema = new mongoose.Schema(
   {
     fullName: {
@@ -29,13 +35,16 @@ const userSchema = new mongoose.Schema(
     },
     passwordHash: {
       type: String,
-      required: [true, 'Password is required'],
-      minlength: [8, 'Password must be at least 8 characters'],
+      required: [true, 'Password hash is required'],
       private: true,
     },
     emailVerified: {
       type: Boolean,
       default: true,
+    },
+    lastLoginAt: {
+      type: Date,
+      default: null,
     },
   },
   {
@@ -53,25 +62,6 @@ userSchema.statics.isEmailTaken = async function isEmailTaken(email, excludeUser
   }
   return String(user._id) !== String(excludeUserId || '');
 };
-
-userSchema.methods.isPasswordMatch = async function isPasswordMatch(candidatePassword) {
-  if (!this.passwordHash) {
-    return false;
-  }
-  return bcrypt.compare(candidatePassword, this.passwordHash);
-};
-
-userSchema.pre('save', async function hashPassword(next) {
-  if (!this.isModified('passwordHash')) {
-    return next();
-  }
-  try {
-    this.passwordHash = await bcrypt.hash(this.passwordHash, config.security.bcryptSaltRounds);
-    return next();
-  } catch (error) {
-    return next(error);
-  }
-});
 
 const User = mongoose.model('User', userSchema);
 

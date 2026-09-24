@@ -300,18 +300,32 @@ Mount per-route, never on the router, so a future route cannot silently inherit 
 Mongoose collections (MongoDB):
 
 ```
-User                 email (unique, lowercase: true), passwordHash,
-                     fullName?, emailVerified (default: true), timestamps
-Token                tokenHash (unique index), user (ObjectId ref),
-                     type ('refresh' | 'resetPassword'),
-                     expiresAt, purgeAt (TTL), revokedAt?, replacedBy?
-PasswordResetOtp     email (indexed), codeHash (NOT unique), expiresAt, purgeAt (TTL),
-                     attempts (default: 0), lockedUntil?, consumedAt?
-RevenueCatEvent      _id (set to event.id directly), type, appUserId, aliases [String],
-                     rawBody (the exact request body string as received), receivedAt
+User                 email (unique, trimmed, lowercase: true), passwordHash (private),
+                     fullName (default null), emailVerified (default: true),
+                     lastLoginAt (default null), timestamps
+Token                tokenHash (unique index), user (ObjectId ref, indexed),
+                     type ('refresh' | 'resetPassword'), familyId (indexed),
+                     expiresAt, purgeAt (required, TTL), rotatedAt?, replacedBy?,
+                     revokedAt?, revokedReason? (LOGOUT|ROTATED|PASSWORD_RESET|ADMIN),
+                     consumedAt? (reset tokens: single use)
+PasswordResetOtp     email (indexed), user (required), codeHash (NOT unique), expiresAt,
+                     purgeAt (required, TTL), attempts (default: 0), consumedAt?,
+                     supersededAt?; index {email, consumedAt, supersededAt, createdAt:-1}
+                     — no lockedUntil: lockout is attempts >= max on the active code
+RevenueCatEvent      _id (set to event.id directly), type, appUserId (indexed),
+                     aliases [String] (indexed), environment, entitlementIds [String],
+                     rawBody (the exact request body string as received), receivedAt,
+                     processedAt?, processingError?
 Entitlement          user (unique), entitlementId (from config, default "hajjcare_pass"),
-                     grantedAt, revokedAt?          — NO expiry field of any kind
+                     store?, transactionId?, grantedAt, revokedAt?
+                                                    — NO expiry field of any kind
+RateLimit            key (unique, e.g. "otp-send:<sha256(email)>:<hour-bucket>"),
+                     count (default 0), purgeAt (TTL)
+AliasLink            alias (unique RevenueCat App User ID), user (null until resolved)
 ```
+
+Refresh tokens: `purgeAt = expiresAt + 7 days`. Reset tokens and OTP codes:
+`purgeAt = expiresAt + 24 hours`.
 
 ### Critical Mongoose-specific rules
 
@@ -350,8 +364,10 @@ The client's parser fails on a bare integer.
 - **`replacedBy` and `revokedAt` on Token are REQUIRED** for the 60-second rotation grace window.
   The current `auth.service.js` deletes the old token outright; that is the bug. The window must
   be time-bounded from the moment of rotation (§A10 rule l).
-- **PasswordResetOtp is keyed by EMAIL, not user,** so the flow behaves identically for addresses
-  with no account.
+- **PasswordResetOtp is looked up by EMAIL,** the only thing verify-otp receives. `user` records
+  the account a code was issued for; codes are only issued for real accounts, so an unknown
+  address has no document and verify-otp answers `invalid_otp`, exactly like a wrong code. The
+  unknown-address path in forgot-password must still do comparable work (§A6).
 - **`RevenueCatEvent._id = event.id` means idempotency comes free** from the primary key; a retry
   is an E11000 we drop.
 - **Entitlement has NO `expiresAt` field. Forbidden.** The pass is lifetime.
@@ -359,7 +375,8 @@ The client's parser fails on a bare integer.
   HMAC-SHA256 with a server secret (§A11).
 - **Password hashing: argon2id only. Min 8 characters, no maximum, no composition rules, no
   truncation.** A server stricter than the client turns an inline rule the pilgrim could have
-  followed into an opaque server error. `bcryptjs` is being removed.
+  followed into an opaque server error. `bcryptjs` has been removed; hashing is
+  `src/services/password.service.js` (argon2id, m=19456 KiB, t=2, p=1).
 
 > **REVERSAL (2026-09-24) — bcrypt.** This annotation used to say "bcrypt or argon2id".
 > bcrypt/bcryptjs silently truncates passwords at 72 bytes, which violates BACKEND_SPEC.md §3.3
@@ -439,6 +456,12 @@ t. **The OTP email is English-only** until the app sends a locale. (§8 item 17)
   `otp_expired`, and the pilgrim sees "wrong code" instead of "code expired".
 - **An OTP `codeHash` is never a unique index:** there are only 10^6 codes, so two pilgrims will
   eventually get the same one.
+- **Run `npm run db:sync-indexes` after ANY index change — locally and on every deploy.**
+  Mongoose never drops or alters an index that already exists in a collection: change a schema
+  and the old index (a unique `codeHash`, a TTL on `expiresAt`) survives in every database
+  created before the change and keeps enforcing the old rule. The script
+  (`scripts/sync-indexes.js`) runs `syncIndexes()` on every model and prints what it dropped
+  and created.
 - **OTP codes are stored as HMAC-SHA256 with a server secret**, not plain sha256: a plain hash
   of a 6-digit code is reversed instantly from a database leak.
 - **Atomic state changes use `findOneAndUpdate` with the precondition in the filter** (e.g.
@@ -565,7 +588,8 @@ lib/           Crypto, tokens, mail.
 A route handler longer than ~15 lines is a smell. Joi validates config. Auth request validation
 is explicit and maps to the contract's specific error codes (`password_too_short`,
 `email_invalid`, …) — never a generic `400 invalid_input` for auth routes. There are no
-migrations: schema changes are Mongoose schemas and indexes.
+migrations: schema changes are Mongoose schemas and indexes, and an index change ships with a
+`npm run db:sync-indexes` run (§A11).
 
 ## C3. Security
 
@@ -626,7 +650,6 @@ OTP_MAX_ATTEMPTS=5               # min 5
 OTP_MAX_SENDS_PER_HOUR=5
 
 PASSWORD_MIN_LENGTH=8            # pinned to 8 — never stricter than the client
-BCRYPT_SALT_ROUNDS=12            # 10–15; removed with bcrypt when argon2id lands
 
 RATE_LIMIT_IP_PER_HOUR=300
 

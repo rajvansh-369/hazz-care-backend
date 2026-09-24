@@ -6,4 +6,6 @@ module.exports = {
   PasswordResetOtp: require('./passwordResetOtp.model'),
   RevenueCatEvent: require('./revenueCatEvent.model'),
   Entitlement: require('./entitlement.model'),
+  RateLimit: require('./rateLimit.model'),
+  AliasLink: require('./aliasLink.model'),
 };

@@ -25,8 +25,6 @@ const defaults = {
   OTP_MAX_ATTEMPTS: '5',
   OTP_MAX_SENDS_PER_HOUR: '5',
   PASSWORD_MIN_LENGTH: '8',
-  // Keep hashing cheap so the suite stays fast; production uses 12.
-  BCRYPT_SALT_ROUNDS: '10',
   RATE_LIMIT_IP_PER_HOUR: '300',
   EMAIL_PROVIDER: 'dev',
   EMAIL_FROM: 'no-reply@hajjcare.test',

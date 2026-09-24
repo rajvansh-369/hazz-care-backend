@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const setupTestDB = require('../utils/setupTestDB');
+const { User, Token } = require('../../src/models');
 
 describe('MongoDB Transactions (Replica Set)', () => {
   setupTestDB();
@@ -73,6 +74,67 @@ describe('MongoDB Transactions (Replica Set)', () => {
       } finally {
         await session.endSession();
       }
+    });
+
+    describe('session.withTransaction across two model collections', () => {
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      const refreshFor = (userId) => {
+        const expiresAt = new Date(Date.now() + 60 * DAY_MS);
+        return {
+          tokenHash: `hash-${new mongoose.Types.ObjectId()}`,
+          user: userId,
+          type: 'refresh',
+          expiresAt,
+          purgeAt: new Date(expiresAt.getTime() + 7 * DAY_MS),
+        };
+      };
+
+      beforeAll(async () => {
+        // Collections cannot be created implicitly inside a transaction on every
+        // server version, so make sure they exist first.
+        await Promise.all([User.createCollection(), Token.createCollection()]);
+      });
+
+      it('commits writes to both collections together', async () => {
+        const session = await mongoose.startSession();
+        try {
+          await session.withTransaction(async () => {
+            const [user] = await User.create(
+              [{ email: 'committed@example.com', passwordHash: 'h' }],
+              { session }
+            );
+            await Token.create([refreshFor(user._id)], { session });
+          });
+        } finally {
+          await session.endSession();
+        }
+
+        const user = await User.findOne({ email: 'committed@example.com' });
+        expect(user).not.toBeNull();
+        await expect(Token.countDocuments({ user: user._id })).resolves.toBe(1);
+      });
+
+      it('writes nothing to either collection when the transaction aborts', async () => {
+        const session = await mongoose.startSession();
+        const failure = new Error('crash between the two writes');
+        try {
+          await expect(
+            session.withTransaction(async () => {
+              const [user] = await User.create(
+                [{ email: 'aborted@example.com', passwordHash: 'h' }],
+                { session }
+              );
+              await Token.create([refreshFor(user._id)], { session });
+              throw failure;
+            })
+          ).rejects.toBe(failure);
+        } finally {
+          await session.endSession();
+        }
+
+        await expect(User.countDocuments({ email: 'aborted@example.com' })).resolves.toBe(0);
+        await expect(Token.countDocuments({})).resolves.toBe(0);
+      });
     });
 
     it('password reset pattern: atomic three-write operation', async () => {

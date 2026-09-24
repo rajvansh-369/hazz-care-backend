@@ -1,3 +1,5 @@
+> ARCHIVED 2026-09-24 — describes code or a contract that no longer exists. CLAUDE.md and BACKEND_SPEC.md are authoritative.
+
 # HajjCare API - Quick Postman Setup
 
 ## Server Running?

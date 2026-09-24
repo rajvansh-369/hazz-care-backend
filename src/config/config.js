@@ -57,7 +57,6 @@ const envVarsSchema = Joi.object()
     OTP_MAX_SENDS_PER_HOUR: Joi.number().integer().min(1).default(5),
 
     PASSWORD_MIN_LENGTH: Joi.number().valid(8).default(8),
-    BCRYPT_SALT_ROUNDS: Joi.number().min(10).max(15).default(12),
 
     RATE_LIMIT_IP_PER_HOUR: Joi.number().integer().min(1).default(300),
 
@@ -154,7 +153,6 @@ const loadConfig = (env) => {
     },
     security: {
       passwordMinLength: envVars.PASSWORD_MIN_LENGTH,
-      bcryptSaltRounds: envVars.BCRYPT_SALT_ROUNDS,
     },
     rateLimit: {
       ipPerHour: envVars.RATE_LIMIT_IP_PER_HOUR,

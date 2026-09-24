@@ -48,6 +48,18 @@ The server refuses to start on a missing secret or an out-of-range value (see
 `src/config/config.js`). Routes are served under `/api/v1`, so the base URL for the app is
 `http://<host>:5000/api/v1`. Health probes: `GET /health` and `GET /api/v1/health/ready`.
 
+### Indexes: run `npm run db:sync-indexes` after any index change
+
+```bash
+npm run db:sync-indexes    # uses MONGODB_URL from .env
+```
+
+Mongoose never drops or alters an index that already exists. After a schema's indexes change,
+an old one (for example a unique index on `PasswordResetOtp.codeHash`, or a TTL on `expiresAt`)
+survives in every existing database and keeps enforcing the old rule. This script runs
+`syncIndexes()` on every model and prints each index it dropped and created. **Run it locally
+after pulling an index change, and on every deploy** before the new version takes traffic.
+
 With `EMAIL_PROVIDER=dev`, emails are written to `.dev-emails/` instead of being sent.
 `NODE_ENV=production` refuses to start unless `EMAIL_PROVIDER=smtp`.
 

@@ -1,3 +1,5 @@
+> ARCHIVED 2026-09-24 — describes code or a contract that no longer exists. CLAUDE.md and BACKEND_SPEC.md are authoritative.
+
 # HajjCare Backend API - Layer A Contract
 
 This Postman collection implements the **Layer A contract** specified in `CLAUDE.md §A`. This is the frozen contract with the shipped Flutter client — no changes without coordinated client release.
