@@ -6,5 +6,4 @@ module.exports = {
   healthService: require('./health.service'),
   passwordService: require('./password.service'),
   tokenService: require('./token.service'),
-  userService: require('./user.service'),
 };

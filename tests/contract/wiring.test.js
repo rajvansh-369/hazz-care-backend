@@ -181,14 +181,15 @@ describe('wiring contract', () => {
       expect(res.status).toBe(401);
     });
 
-    test('a valid token passes authentication and reaches the stub (503)', async () => {
+    test('a valid token whose sub is not an ObjectId → 401, never a CastError 503', async () => {
       const res = await getMe(`Bearer ${signAccess({ sub: 'user-1' }, { expiresIn: 60 })}`);
-      expect(res.status).toBe(503);
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ code: 'unauthorized' });
     });
   });
 
-  describe('every stub answers 503, never 200', () => {
-    test.each(['register', 'login', 'refresh', 'forgot-password', 'verify-otp', 'reset-password', 'logout'])(
+  describe('every remaining stub answers 503, never 200', () => {
+    test.each(['refresh', 'forgot-password', 'verify-otp', 'reset-password', 'logout'])(
       'POST %s',
       async (name) => {
         const res = await post(`${AUTH}/${name}`, { email: 'pilgrim@example.com', password: 'long enough' });

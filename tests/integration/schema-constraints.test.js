@@ -75,7 +75,7 @@ describe('Schema constraints against a real MongoDB', () => {
       const user = await createUser();
       user.fullName = 'Renamed';
       await user.save();
-      const fresh = await User.findById(user._id).lean();
+      const fresh = await User.findById(user._id).select('+passwordHash').lean();
       expect(fresh.passwordHash).toBe('$argon2id$placeholder');
     });
 
