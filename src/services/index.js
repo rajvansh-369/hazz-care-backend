@@ -6,6 +6,7 @@ module.exports = {
   healthService: require('./health.service'),
   otpService: require('./otp.service'),
   passwordService: require('./password.service'),
+  revenueCatService: require('./revenueCat.service'),
   sendLimitService: require('./sendLimit.service'),
   tokenService: require('./token.service'),
 };

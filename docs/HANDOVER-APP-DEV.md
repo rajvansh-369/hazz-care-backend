@@ -40,7 +40,7 @@ Force the real client with `--dart-define=HAJJCARE_USE_MOCK_BACKEND=false`.
 | 12. Password | **Min 8 characters, no maximum, no composition rules, never trimmed, never truncated** (argon2id) |
 | 13. OTP | **600 s expiry, 60 s resend cooldown, 6 digits, 5 attempts.** A resend voids the old code and resets the attempts. An expired code does not use up an attempt. The lockout is checked before the code |
 | 14. `attemptsRemaining` | **Not sent** |
-| 15. `Retry-After` on 429 | TODO: not decided. Today the per-IP limiters' `429`s happen to carry `Retry-After` (seconds) plus `RateLimit`/`RateLimit-Policy` headers; the per-address forgot-password `429` and the OTP lockout `429` carry none. Do not rely on it until it is agreed |
+| 15. `Retry-After` on 429 | **No change.** The app does not read `Retry-After`. The per-IP limiters' `429`s already send it (seconds, plus `RateLimit`/`RateLimit-Policy`); the per-address forgot-password `429` and the OTP lockout `429` do not, and need not |
 | 16. Reset token | **600 s, single-use**. `verify-otp` returns a reset token only, never a session; `reset-password` returns `204` with no tokens |
 | 17. Email language | **English only**, see below |
 | 18. Login brute-force protection | **None: no `429` on login or register, ever** |
@@ -55,8 +55,6 @@ returns `{ "tokens": {…} }` with no `user`; every body is a bare JSON object; 
 
 - **The OTP email is English only**, because the app sends no locale (§8 item 17). Localised
   emails need the app to send one first (a header or a field on `forgot-password`).
-- **`POST /webhooks/revenuecat` is not built yet.** The app never calls it, and purchases and
-  restores work without it. Until it exists the server has no record of who paid.
 - TODO: nothing in the family-group section (§6c) is built. It waits for the client screen.
 
 ## Creating a test account on staging

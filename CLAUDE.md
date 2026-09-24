@@ -42,7 +42,7 @@ POST /auth/verify-otp
 POST /auth/reset-password
 POST /auth/logout
 GET  /auth/me                 ← only endpoint with an Authorization header
-POST /webhooks/revenuecat     ← server-to-server, client never calls or waits on it
+POST /webhooks/revenuecat     ← server-to-server, client never calls or waits on it (IMPLEMENTED)
 ```
 
 BACKEND_SPEC.md §6c specifies six family-group endpoints. **Do not build them until the client
@@ -193,6 +193,13 @@ join the entitlement record to the user by our `user.id` and search on the user'
 (BACKEND_SPEC.md §6b rule 9).
 
 ### `POST /webhooks/revenuecat`
+
+> **IMPLEMENTED (2026-09-24).** Mounted at `${API_PREFIX}/webhooks/revenuecat` with
+> `express.raw()` before `express.json()`; answers only 200, 400, 401 or 503 (it is outside the
+> auth router, so A3/A10 do not apply). Code: `src/routes/v1/webhook.route.js`,
+> `src/controllers/revenueCatWebhook.controller.js`, `src/lib/revenueCatAuth.js`,
+> `src/services/revenueCat.service.js`. Support lookup: `npm run find-purchase -- <email>`.
+> Tests: `tests/contract/revenuecat-webhook.test.js`. Dashboard setup: `docs/DEPLOY.md` §7.
 
 - **Auth:** BACKEND_SPEC.md §6b describes two mechanisms; **HMAC signing is the preferred one.**
   RevenueCat sends `X-RevenueCat-Webhook-Signature: t=<ts>,v1=<hex>`, an HMAC-SHA256 computed

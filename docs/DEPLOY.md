@@ -57,8 +57,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `EMAIL_PROVIDER` | `smtp` (production refuses anything else) | |
 | `SMTP_URL` | `smtp://<user>:<pass>@<host>:587` from your provider | **yes** |
 | `EMAIL_FROM` | an address on your verified sending domain | |
-| `RC_WEBHOOK_SECRET` | ≥ 32 characters, random. Required at boot although the webhook is not built yet | **yes** |
-| `RC_WEBHOOK_HMAC_SECRET` | optional; leave unset until the webhook exists | **yes** |
+| `RC_WEBHOOK_SECRET` | ≥ 32 characters, random. The RevenueCat webhook's Authorization header value (§7); required at boot even when signing is used | **yes** |
+| `RC_WEBHOOK_HMAC_SECRET` | the webhook signing secret from RevenueCat (§7). When set, requests must be signed and the Authorization header is not checked | **yes** |
 | `HAJJCARE_ENTITLEMENT_ID` | `hajjcare_pass` | |
 
 `EMAIL_DEV_DIR` and `MONGODB_REPLICA_SET` are not needed in production.
@@ -84,8 +84,8 @@ the limiters use a shared store. The per-address OTP send limit is stored in Mon
 already safe across instances.
 
 Give the platform a stop grace period of **at least 35 seconds**. On SIGTERM the app stops
-accepting connections, finishes in-flight requests, waits up to 10s for queued OTP emails,
-closes MongoDB and exits 0; its own backstop forces an exit at 30s.
+accepting connections, finishes in-flight requests, waits up to 10s for queued OTP emails and
+webhook processing, closes MongoDB and exits 0; its own backstop forces an exit at 30s.
 
 ## 5. TRUST_PROXY
 
@@ -105,7 +105,44 @@ spam and the pilgrim cannot reset their password. The email is English only for 
 Sending never blocks a request: a failed send is retried in the background and logged without
 the address or the code; the pilgrim's recovery is the Resend button.
 
-## 7. Container
+## 7. RevenueCat webhook
+
+`POST /api/v1/webhooks/revenuecat` records purchases and refunds for support. The app never
+calls it and never waits on it: a pilgrim can buy, restore and use the pass while it is down.
+
+In the RevenueCat dashboard, *Project → Integrations → Webhooks → Add*:
+
+1. **Webhook URL:** `https://<host>/api/v1/webhooks/revenuecat`
+2. **Authorization header value:** exactly the value of `RC_WEBHOOK_SECRET`, with no `Bearer`
+   prefix unless you put one in the variable too (the comparison is exact).
+3. **Signing (recommended):** enable HMAC webhook signing and put the secret it shows into
+   `RC_WEBHOOK_HMAC_SECRET`. It is **shown once** — copy it before closing the dialog; the only
+   recovery is Rotate. With this set the server verifies `X-RevenueCat-Webhook-Signature` over
+   the raw body, rejects a timestamp more than 5 minutes off, and ignores the Authorization
+   header. Deploy the variable before enabling signing, or every delivery is refused with `401`.
+4. **Environment:** send both production and sandbox events if you like. In production,
+   `SANDBOX` events are stored but never grant or revoke anything.
+5. Press **Send test webhook**. Expect `200`; a `TEST` event is not stored.
+
+The endpoint answers `200` once the event is stored (a redelivery of the same `event.id` is also
+`200`), `401` for a failed signature or secret, `400` for a body that is not a RevenueCat event,
+and `503` when storage fails, which makes RevenueCat retry (5 times, over under three hours). A
+stream of `401`s in the dashboard means a secret mismatch.
+
+Support lookup, with the production environment variables:
+
+```bash
+npm run find-purchase -- pilgrim@example.com     # in the image: node scripts/find-purchase.js <email>
+```
+
+It prints the account id, its pass (granted or revoked, store, transaction id, dates), linked
+RevenueCat aliases and webhook events, newest first. An event with `error: unresolved` is a
+purchase made under an anonymous RevenueCat id that no account has claimed yet; it is applied
+automatically when a later event links that id to an account. An event with `processed: -` and
+no error was stored but not processed (the process stopped in between); it is not retried
+automatically.
+
+## 8. Container
 
 `Dockerfile` builds a `node:22-bookworm-slim` image with production dependencies only, running
 as the unprivileged `node` user, with a `HEALTHCHECK` on `/api/v1/health`.

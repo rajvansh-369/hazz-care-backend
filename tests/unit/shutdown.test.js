@@ -26,13 +26,13 @@ const recorder = ({ idle, disconnect } = {}) => {
   };
   const deps = {
     getServer: () => server,
-    emailService: {
+    background: {
       idle: jest.fn(async () => {
-        calls.push('email.idle');
+        calls.push('background.idle');
         if (idle) {
           await idle();
         }
-        calls.push('email.idle.done');
+        calls.push('background.idle.done');
       }),
     },
     database: {
@@ -53,14 +53,14 @@ const recorder = ({ idle, disconnect } = {}) => {
 };
 
 describe('graceful shutdown', () => {
-  test('closes the server, then waits for emails, then closes MongoDB, then exits 0', async () => {
+  test('closes the server, then waits for background work, then closes MongoDB, then exits 0', async () => {
     const { calls, server, deps } = recorder();
     await createShutdown(deps)('SIGTERM');
     expect(calls).toEqual([
       'server.close',
       'server.closed',
-      'email.idle',
-      'email.idle.done',
+      'background.idle',
+      'background.idle.done',
       'db.disconnect',
       'exit:0',
     ]);
@@ -73,14 +73,14 @@ describe('graceful shutdown', () => {
     expect(calls[calls.length - 1]).toBe('exit:1');
   });
 
-  test('stops waiting for emails after the cap, then still closes MongoDB and exits 0', async () => {
+  test('stops waiting for background work after the cap, then still closes MongoDB and exits 0', async () => {
     const { calls, deps } = recorder({ idle: () => new Promise(() => {}) });
-    await createShutdown({ ...deps, emailIdleCapMs: 30 })('SIGTERM');
-    expect(calls).toEqual(['server.close', 'server.closed', 'email.idle', 'db.disconnect', 'exit:0']);
+    await createShutdown({ ...deps, backgroundIdleCapMs: 30 })('SIGTERM');
+    expect(calls).toEqual(['server.close', 'server.closed', 'background.idle', 'db.disconnect', 'exit:0']);
     expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/pending after 30ms/));
   });
 
-  test('a failed email queue does not stop the shutdown', async () => {
+  test('a failed background job does not stop the shutdown', async () => {
     const { calls, deps } = recorder({
       idle: async () => {
         throw new Error('smtp down');
@@ -101,7 +101,7 @@ describe('graceful shutdown', () => {
     const shutdown = createShutdown(deps);
     const first = shutdown('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toContain('email.idle');
+    expect(calls).toContain('background.idle');
 
     await shutdown('SIGINT');
     expect(calls[calls.length - 1]).toBe('exit:1');
@@ -160,7 +160,7 @@ describe('graceful shutdown', () => {
     });
     createShutdown({
       getServer: () => server,
-      emailService: { idle: async () => order.push('email.idle') },
+      background: { idle: async () => order.push('background.idle') },
       database: { disconnect: async () => order.push('db.disconnect') },
       logger: silentLogger(),
       exit: (code) => {
@@ -171,7 +171,7 @@ describe('graceful shutdown', () => {
 
     await expect(inFlight).resolves.toEqual({ status: 200, body: { done: true } });
     await exited;
-    expect(order).toEqual(['response', 'email.idle', 'db.disconnect', 'exit:0']);
+    expect(order).toEqual(['response', 'background.idle', 'db.disconnect', 'exit:0']);
     // Regression: the kept-alive socket of the finished request held close() open.
     expect(Date.now() - began).toBeLessThan(1500);
 

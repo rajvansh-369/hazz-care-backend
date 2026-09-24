@@ -29,7 +29,8 @@ const main = async () => {
 
   const replSet = await MongoMemoryReplSet.create({
     replSet: { name: REPL_SET, count: 1, storageEngine: 'wiredTiger' },
-    instanceOpts: [{ port: PORT, dbPath: DB_PATH, storageEngine: 'wiredTiger' }],
+    // launchTimeout: after an unclean stop, WiredTiger recovery took 12s, past the 10s default.
+    instanceOpts: [{ port: PORT, dbPath: DB_PATH, storageEngine: 'wiredTiger', launchTimeout: 30000 }],
   });
 
   const uri = `mongodb://127.0.0.1:${PORT}/${DB_NAME}?replicaSet=${REPL_SET}`;

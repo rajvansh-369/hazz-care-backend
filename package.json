@@ -19,7 +19,8 @@
     "format": "prettier --write \"**/*.{js,json,md,css,html}\"",
     "db:dev": "node scripts/dev-replset.js",
     "db:sync-indexes": "node scripts/sync-indexes.js",
-    "contract": "node scripts/verify-contract.js"
+    "contract": "node scripts/verify-contract.js",
+    "find-purchase": "node scripts/find-purchase.js"
   },
   "keywords": [
     "node",

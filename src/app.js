@@ -65,9 +65,11 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// 6. RevenueCat webhook (Phase 2, CLAUDE.md A5): mount it HERE, with
-// express.raw({ type: 'application/json' }), BEFORE express.json() — the HMAC is
-// computed over the raw request bytes, and a parsed-then-reserialised body fails it.
+// 6. RevenueCat webhook (CLAUDE.md A5, BACKEND_SPEC.md §6b), BEFORE express.json():
+// its router reads the raw request bytes, which the HMAC signature is computed over.
+// Server-to-server and outside the auth router, so the /auth status rules do not
+// apply; it answers only 200, 400, 401 or 503.
+app.use(`${config.apiPrefix}/webhooks`, require('./routes/v1/webhook.route'));
 
 // 7. JSON body parsing with a hard ceiling. Malformed JSON → 400 and oversized
 // bodies → 413, both {"code":"invalid_input"}, via the error handler.

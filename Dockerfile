@@ -13,8 +13,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src ./src
-# The only script production needs: `npm run db:sync-indexes` on every deploy.
-COPY scripts/sync-indexes.js ./scripts/sync-indexes.js
+# The scripts production needs: `npm run db:sync-indexes` on every deploy, and the
+# support lookup `npm run find-purchase -- <email>`.
+COPY scripts/sync-indexes.js scripts/find-purchase.js ./scripts/
 
 # Run unprivileged. The `node` user ships with the base image.
 USER node

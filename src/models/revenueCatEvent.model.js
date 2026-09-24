@@ -22,9 +22,11 @@ const revenueCatEventSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // RevenueCat's app_user_id, else the first other id the event carries. Null when
+    // it carries none: an unrecognised event is still stored, never refused.
     appUserId: {
       type: String,
-      required: true,
+      default: null,
       index: true,
     },
     aliases: {

@@ -31,10 +31,11 @@ describe('RevenueCatEvent Model', () => {
       expect(RevenueCatEvent.schema.paths._id.instance).toBe('String');
     });
 
-    it('has a required type and a required, indexed appUserId', () => {
+    it('has a required type and an indexed appUserId that may be null (an event with no user id is still stored)', () => {
       expect(RevenueCatEvent.schema.paths.type.options.required).toBeDefined();
       const appUserId = RevenueCatEvent.schema.paths.appUserId;
-      expect(appUserId.options.required).toBeDefined();
+      expect(appUserId.options.required).toBeUndefined();
+      expect(appUserId.options.default).toBeNull();
       expect(appUserId.options.index).toBe(true);
     });
 

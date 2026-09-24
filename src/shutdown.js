@@ -5,8 +5,10 @@
  *
  *   1. Stop accepting connections. In-flight requests run to completion; idle
  *      keep-alive sockets are closed so they cannot hold the server open.
- *   2. Wait for queued OTP emails to settle, for at most `emailIdleCapMs`. An email
- *      that misses the cap is lost; the pilgrim recovers with the Resend button.
+ *   2. Wait for background work (queued OTP emails, RevenueCat events being processed)
+ *      to settle, for at most `backgroundIdleCapMs`. An email that misses the cap is
+ *      lost; the pilgrim recovers with the Resend button. A webhook event that misses it
+ *      stays stored with no processedAt (find-purchase shows it).
  *   3. Close the Mongoose connection (after the requests, which still need it).
  *   4. Exit with `exitCode`.
  *
@@ -18,11 +20,11 @@ const IDLE_SWEEP_MS = 100;
 
 const createShutdown = ({
   getServer,
-  emailService,
+  background,
   database,
   logger,
   exit = (code) => process.exit(code),
-  emailIdleCapMs = 10000,
+  backgroundIdleCapMs = 10000,
   forceExitMs = 30000,
 }) => {
   let inProgress = false;
@@ -76,9 +78,11 @@ const createShutdown = ({
         await closeServer(server);
         logger.info('HTTP server closed');
       }
-      const emailsSent = await settlesWithin(emailService.idle(), emailIdleCapMs);
-      if (!emailsSent) {
-        logger.warn(`Queued emails still pending after ${emailIdleCapMs}ms, abandoning them`);
+      const settled = await settlesWithin(background.idle(), backgroundIdleCapMs);
+      if (!settled) {
+        logger.warn(
+          `Background work (emails, webhook processing) still pending after ${backgroundIdleCapMs}ms, abandoning it`
+        );
       }
       await database.disconnect();
       logger.info('MongoDB connection closed');

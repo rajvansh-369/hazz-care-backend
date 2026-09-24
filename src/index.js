@@ -5,11 +5,15 @@ const config = require('./config/config');
 const logger = require('./config/logger');
 const database = require('./config/database');
 const emailService = require('./services/email.service');
+const revenueCatService = require('./services/revenueCat.service');
 const { createShutdown } = require('./shutdown');
 
 let server;
 
-const shutdown = createShutdown({ getServer: () => server, emailService, database, logger });
+// Work that runs after its request has been answered, and must settle before exit.
+const background = { idle: () => Promise.all([emailService.idle(), revenueCatService.idle()]) };
+
+const shutdown = createShutdown({ getServer: () => server, background, database, logger });
 
 const start = async () => {
   await database.connect();
