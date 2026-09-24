@@ -24,6 +24,8 @@ const defaults = {
   OTP_LENGTH: '6',
   OTP_MAX_ATTEMPTS: '5',
   OTP_MAX_SENDS_PER_HOUR: '5',
+  // Low so the suite stays fast; the floor itself is still exercised.
+  FORGOT_PASSWORD_MIN_RESPONSE_MS: '20',
   PASSWORD_MIN_LENGTH: '8',
   RATE_LIMIT_IP_PER_HOUR: '300',
   EMAIL_PROVIDER: 'dev',

@@ -188,17 +188,6 @@ describe('wiring contract', () => {
     });
   });
 
-  describe('every remaining stub answers 503, never 200', () => {
-    test.each(['forgot-password', 'verify-otp', 'reset-password'])(
-      'POST %s',
-      async (name) => {
-        const res = await post(`${AUTH}/${name}`, { email: 'pilgrim@example.com', password: 'long enough' });
-        expect(res.status).toBe(503);
-        expect(res.body).toEqual({ code: 'unavailable' });
-      }
-    );
-  });
-
   describe('outside the auth router', () => {
     test('GET /api/v1/health → 200', async () => {
       const res = await request(app).get(`${API}/health`).then(track);

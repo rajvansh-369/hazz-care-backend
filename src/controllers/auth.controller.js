@@ -1,5 +1,6 @@
 'use strict';
 
+const config = require('../config/config');
 const logger = require('../config/logger');
 const authService = require('../services/auth.service');
 const authValidation = require('../validations/auth.validation');
@@ -10,14 +11,8 @@ const { toAuthSession, toAuthUser } = require('../utils/serialize');
 
 /**
  * HTTP only: validate, call the service, shape the response. Every handler reads
- * `req.body || {}`-safe input through the validators, which accept any body.
- *
- * Handlers not implemented yet answer 503 {"code":"unavailable"} — never 200 {},
- * which the client fails to parse as a session. 503 is retryable on the client and
- * never ends a session.
+ * its input through the validators, which accept any body (including none).
  */
-const notImplemented = (req, res) => sendJson(res, 503, { code: errorCodes.unavailable });
-
 const register = catchAsync(async (req, res) => {
   const input = authValidation.register(req.body);
   const { user, tokens } = await authService.register(input);
@@ -96,6 +91,47 @@ const logout = catchAsync(async (req, res) => {
   return sendNoContent(res);
 });
 
+const waitUntil = (deadline) => {
+  const remaining = deadline - Date.now();
+  return remaining > 0 ? new Promise((resolve) => setTimeout(resolve, remaining)) : undefined;
+};
+
+/**
+ * POST /auth/forgot-password — 200 with a fresh { expiresInSeconds, resendAfterSeconds,
+ * codeLength } for every valid address. Whatever the outcome, it never answers sooner
+ * than FORGOT_PASSWORD_MIN_RESPONSE_MS after the request started, so timing cannot
+ * reveal whether an account exists (§3.6, §6).
+ */
+const forgotPassword = catchAsync(async (req, res) => {
+  const startedAt = Date.now();
+  let body;
+  try {
+    body = await authService.forgotPassword(authValidation.forgotPassword(req.body));
+  } finally {
+    await waitUntil(startedAt + config.otp.forgotPasswordMinResponseMs);
+  }
+  sendJson(res, 200, body);
+});
+
+/** POST /auth/verify-otp — 200 with exactly { resetToken, expiresInSeconds }. */
+const verifyOtp = catchAsync(async (req, res) => {
+  const input = authValidation.verifyOtp(req.body);
+  const { resetToken, expiresInSeconds } = await authService.verifyOtp(input);
+  sendJson(res, 200, { resetToken, expiresInSeconds });
+});
+
+/**
+ * POST /auth/reset-password — 204, no body, no tokens. The token is checked before the
+ * password, so a dead token is reported first (§3.8).
+ */
+const resetPassword = catchAsync(async (req, res) => {
+  const resetToken = authValidation.resetToken(req.body);
+  await authService.assertUsableResetToken(resetToken);
+  const password = authValidation.newPassword(req.body);
+  await authService.resetPassword(resetToken, password);
+  sendNoContent(res);
+});
+
 /** A bare AuthUser, not { user }, and nothing else (BACKEND_SPEC.md §3.10). */
 const me = catchAsync(async (req, res) => {
   const user = await authService.getMe(req.auth.userId);
@@ -106,9 +142,9 @@ module.exports = {
   register,
   login,
   refresh,
-  forgotPassword: notImplemented,
-  verifyOtp: notImplemented,
-  resetPassword: notImplemented,
+  forgotPassword,
+  verifyOtp,
+  resetPassword,
   logout,
   me,
 };

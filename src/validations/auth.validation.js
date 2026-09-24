@@ -94,6 +94,70 @@ const refresh = (body) => {
  */
 const logout = (body) => refresh(body);
 
+/**
+ * Same address rule as register: trimmed, the client's pattern, then lowercased.
+ * @param {unknown} body
+ * @returns {{ email: string }}
+ * @throws {ApiError} 422 invalid_input, field email = email_invalid
+ */
+const forgotPassword = (body) => {
+  const { email } = bodyOf(body);
+  if (typeof email !== 'string' || !CLIENT_EMAIL_PATTERN.test(email.trim())) {
+    throw ApiError.emailInvalid();
+  }
+  return { email: normaliseEmail(email) };
+};
+
+const OTP_CODE_PATTERN = /^[0-9]{6}$/;
+
+/**
+ * Rejected here, before the OTP service, so a malformed request consumes no attempt.
+ * The app always sends exactly six ASCII digits (§3.7).
+ *
+ * @param {unknown} body
+ * @returns {{ email: string, code: string }}
+ * @throws {ApiError} 400 invalid_otp, field code = invalid_otp
+ */
+const verifyOtp = (body) => {
+  const { email, code } = bodyOf(body);
+  if (typeof email !== 'string' || typeof code !== 'string' || !OTP_CODE_PATTERN.test(code)) {
+    throw ApiError.invalidOtp();
+  }
+  return { email, code };
+};
+
+/**
+ * The first half of reset-password: the token's shape. Checked before the password,
+ * so a pilgrim with a dead token is not asked to fix a password for nothing.
+ *
+ * @param {unknown} body
+ * @returns {string}
+ * @throws {ApiError} 400 invalid_reset_token, field resetToken
+ */
+const resetToken = (body) => {
+  const { resetToken: token } = bodyOf(body);
+  if (typeof token !== 'string' || token.length === 0) {
+    throw ApiError.invalidResetToken();
+  }
+  return token;
+};
+
+/**
+ * The second half of reset-password: same rule as register — min 8 by `.length`,
+ * never trimmed, no maximum, no composition rules.
+ *
+ * @param {unknown} body
+ * @returns {string}
+ * @throws {ApiError} 422 invalid_input, field password = password_too_short
+ */
+const newPassword = (body) => {
+  const { password } = bodyOf(body);
+  if (typeof password !== 'string' || password.length < config.security.passwordMinLength) {
+    throw ApiError.passwordTooShort();
+  }
+  return password;
+};
+
 module.exports = {
   CLIENT_EMAIL_PATTERN,
   normaliseEmail,
@@ -101,4 +165,8 @@ module.exports = {
   login,
   refresh,
   logout,
+  forgotPassword,
+  verifyOtp,
+  resetToken,
+  newPassword,
 };

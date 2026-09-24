@@ -648,6 +648,7 @@ OTP_RESEND_AFTER_SECONDS=60
 OTP_LENGTH=6                     # pinned to 6
 OTP_MAX_ATTEMPTS=5               # min 5
 OTP_MAX_SENDS_PER_HOUR=5
+FORGOT_PASSWORD_MIN_RESPONSE_MS=300  # 0–2000; response-time floor on forgot-password (§A6)
 
 PASSWORD_MIN_LENGTH=8            # pinned to 8 — never stricter than the client
 

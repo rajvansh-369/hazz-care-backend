@@ -1,9 +1,13 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const config = require('../config/config');
 const { User } = require('../models');
 const ApiError = require('../utils/ApiError');
+const emailService = require('./email.service');
+const otpService = require('./otp.service');
 const passwordService = require('./password.service');
+const sendLimitService = require('./sendLimit.service');
 const tokenService = require('./token.service');
 
 const DUPLICATE_KEY = 11000;
@@ -106,10 +110,114 @@ const refresh = async (refreshToken) => tokenService.rotate(refreshToken);
  */
 const logout = async (refreshToken) => tokenService.revoke(refreshToken, 'LOGOUT');
 
+/**
+ * POST /auth/forgot-password. Identical outcome for every valid address, registered
+ * or not — same status, same body, same shape of work (BACKEND_SPEC.md §3.6, §6):
+ * the per-address send limit runs for both, and the unknown path runs the same
+ * transaction against a filter that matches nothing and schedules a no-op email.
+ * Email delivery is never awaited.
+ *
+ * @param {{ email: string }} input validated, email normalised
+ * @returns {Promise<{ expiresInSeconds: number, resendAfterSeconds: number, codeLength: number }>}
+ */
+const forgotPassword = async ({ email }) => {
+  const { allowed } = await sendLimitService.consume(email);
+  if (!allowed) {
+    throw ApiError.tooManyAttempts();
+  }
+
+  const user = await User.findOne({ email });
+  if (user) {
+    const { code } = await otpService.issue(user);
+    emailService.enqueueOtpEmail({ to: user.email, code });
+  } else {
+    await otpService.simulateIssue();
+    emailService.enqueueNoop();
+  }
+
+  // A fresh full set on every call, resends included: the client's countdowns start
+  // from these numbers (§5).
+  return {
+    expiresInSeconds: config.otp.ttlSeconds,
+    resendAfterSeconds: config.otp.resendAfterSeconds,
+    codeLength: config.otp.length,
+  };
+};
+
+/**
+ * POST /auth/verify-otp. A verified code buys a reset token and nothing else — never
+ * a session (§3.7, §6). If issuing the token fails after the code was consumed, the
+ * error propagates (503) and the pilgrim asks for a new code.
+ *
+ * @param {{ email: string, code: string }} input validated
+ * @returns {Promise<{ resetToken: string, expiresInSeconds: number }>}
+ */
+const verifyOtp = async ({ email, code }) => {
+  const result = await otpService.verify(email, code);
+  if (result.error === 'locked') {
+    throw ApiError.tooManyAttempts();
+  }
+  if (result.error === 'expired') {
+    throw ApiError.otpExpired();
+  }
+  if (!result.ok) {
+    throw ApiError.invalidOtp();
+  }
+  const resetToken = await tokenService.issueResetToken(result.userId);
+  return { resetToken, expiresInSeconds: config.tokens.resetTtlSeconds };
+};
+
+/**
+ * Read-only check that a reset token is usable, before the password is validated.
+ * @param {string} resetToken
+ * @throws {ApiError} 400 invalid_reset_token
+ */
+const assertUsableResetToken = async (resetToken) => {
+  if (!(await tokenService.findUsableResetToken(resetToken))) {
+    throw ApiError.invalidResetToken();
+  }
+};
+
+/**
+ * POST /auth/reset-password. The hash is computed before the transaction opens, to
+ * keep it short. Then, atomically: spend the token (a concurrent double-submit loses
+ * here), set the password, spend every other reset token and OTP code for the
+ * account, and revoke every refresh token. Returns nothing: no tokens (§3.8).
+ *
+ * @param {string} resetToken
+ * @param {string} password validated, untrimmed
+ */
+const resetPassword = async (resetToken, password) => {
+  const passwordHash = await passwordService.hash(password);
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const tokenDoc = await tokenService.consumeResetToken(resetToken, { session });
+      if (!tokenDoc) {
+        throw ApiError.invalidResetToken();
+      }
+      const userId = tokenDoc.user;
+      const updated = await User.updateOne({ _id: userId }, { $set: { passwordHash } }, { session });
+      if (updated.matchedCount === 0) {
+        throw ApiError.invalidResetToken();
+      }
+      await tokenService.invalidateResetTokensForUser(userId, { session });
+      await otpService.supersedeAllForUser(userId, { session });
+      await tokenService.revokeAllForUser(userId, 'PASSWORD_RESET', { session });
+    });
+  } finally {
+    await session.endSession();
+  }
+};
+
 module.exports = {
   register,
   login,
   getMe,
   refresh,
   logout,
+  forgotPassword,
+  verifyOtp,
+  assertUsableResetToken,
+  resetPassword,
 };

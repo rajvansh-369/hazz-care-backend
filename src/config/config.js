@@ -55,6 +55,12 @@ const envVarsSchema = Joi.object()
     OTP_LENGTH: Joi.number().valid(6).default(6),
     OTP_MAX_ATTEMPTS: Joi.number().integer().min(5).default(5),
     OTP_MAX_SENDS_PER_HOUR: Joi.number().integer().min(1).default(5),
+    FORGOT_PASSWORD_MIN_RESPONSE_MS: Joi.number()
+      .integer()
+      .min(0)
+      .max(2000)
+      .default(300)
+      .description('forgot-password never answers sooner; hides whether an account exists'),
 
     PASSWORD_MIN_LENGTH: Joi.number().valid(8).default(8),
 
@@ -150,6 +156,7 @@ const loadConfig = (env) => {
       length: envVars.OTP_LENGTH,
       maxAttempts: envVars.OTP_MAX_ATTEMPTS,
       maxSendsPerHour: envVars.OTP_MAX_SENDS_PER_HOUR,
+      forgotPasswordMinResponseMs: envVars.FORGOT_PASSWORD_MIN_RESPONSE_MS,
     },
     security: {
       passwordMinLength: envVars.PASSWORD_MIN_LENGTH,

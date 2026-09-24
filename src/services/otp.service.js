@@ -83,6 +83,29 @@ const createOtpService = ({ now = () => new Date() } = {}) => {
   };
 
   /**
+   * The unknown-address path of forgot-password: the same shape of work as issue()
+   * — a code, an HMAC, a transaction running the same updateMany — against a filter
+   * that cannot match anything, and nothing stored. Timing must not reveal whether
+   * an account exists (BACKEND_SPEC.md §3.6, §6).
+   */
+  const simulateIssue = async () => {
+    hashCode('0'.repeat(24), generateCode());
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await PasswordResetOtp.updateMany(
+          // No stored email is ever empty, so this matches nothing — through the same index.
+          { email: '', consumedAt: null, supersededAt: null },
+          { $set: { supersededAt: now() } },
+          { session }
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+  };
+
+  /**
    * Checks, in this order (BACKEND_SPEC.md §3.7):
    *   a) locked   — attempts >= max, BEFORE the code, so the right code still waits;
    *   b) expired  — no attempt charged: never punish a pilgrim for a clock;
@@ -150,7 +173,7 @@ const createOtpService = ({ now = () => new Date() } = {}) => {
     );
   };
 
-  return { generateCode, issue, verify, supersedeAllForUser };
+  return { generateCode, issue, simulateIssue, verify, supersedeAllForUser };
 };
 
 module.exports = {
