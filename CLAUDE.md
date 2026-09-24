@@ -684,8 +684,20 @@ until the matching decision lands — a required-but-unused secret means the ser
 ## C6. Deployment
 
 **Target (decided 2026-09-24):** one Ubuntu VPS running `docker-compose.prod.yml` — MongoDB 7 as
-a one-node replica set in a container, the API, and Caddy for HTTPS (automatic Let's Encrypt).
+a one-node replica set in a container and the API, with one reverse proxy terminating HTTPS.
 Exact commands: `docs/VPS-RUNBOOK.md`.
+
+- **Staging VPS (decided 2026-09-24): host nginx + certbot terminate TLS.** The staging VPS
+  (57.128.170.115) already runs nginx on 80/443 for other live sites, which must not be
+  disturbed: never stop or restart nginx, only `nginx -t` then `systemctl reload nginx`; do not
+  touch UFW or SSH there. Its server block is `deploy/nginx/api-staging.healthhub4u.co.uk.conf`
+  (plain `proxy_pass http://127.0.0.1:5100;`, no URI part, and no `error_page`,
+  `proxy_intercept_errors`, `try_files`, caching or rewrites: status codes and JSON bodies pass
+  through untouched). The api is published on **`127.0.0.1:5100` only**, by
+  `docker-compose.prod.host-nginx.yml` (`API_HOST_PORT`). **Always use `deploy/dc.sh`** there,
+  which passes both compose files; the backup and restore scripts use it too.
+- **Caddy is an optional profile** (`--profile caddy`) for a server with no web server of its
+  own. A plain `up` never starts it.
 
 - **Hostnames (decided 2026-09-24):** staging is `api-staging.healthhub4u.co.uk`, so the Flutter
   base URL is `https://api-staging.healthhub4u.co.uk/api/v1`. Production will be
@@ -693,9 +705,11 @@ Exact commands: `docs/VPS-RUNBOOK.md`.
 - **Caddy reads only `deploy/caddy.env`** (`API_DOMAIN`, nothing else; the example is committed,
   the file is not). Never give Caddy `.env.production`: it would see every app secret.
 
-- **MongoDB is never published.** Only Caddy has `ports:` (80, 443). Docker's published ports
-  bypass UFW, so a `ports:` entry on `mongo` or `api` would put it on the internet.
-- **Exactly one `api` replica** (the limiters below); `TRUST_PROXY=1` (Caddy is the one proxy).
+- **MongoDB is never published.** The only `ports:` are Caddy's (80, 443, Caddy servers) and the
+  api's `127.0.0.1:5100` (host-nginx servers) — never `0.0.0.0`. Docker's published ports bypass
+  UFW, so any other `ports:` entry on `mongo` or `api` would put it on the internet.
+- **Exactly one `api` replica** (the limiters below); `TRUST_PROXY=1` (nginx or Caddy is the one
+  proxy).
 - **Gmail SMTP with an App Password is for staging only** (about 500 messages a day). Production
   needs a transactional provider; that changes only `SMTP_URL` and `EMAIL_FROM`.
 - **Backups daily** from host cron: `deploy/backup-mongo.sh` (mongodump of the `hajjcare`
@@ -703,7 +717,9 @@ Exact commands: `docs/VPS-RUNBOOK.md`.
 - Against staging, run the contract checker with `OTP_EMAIL=<real inbox>`: every account it
   registers is a plus-address of that inbox, so no mail is sent to `hajjcare.test`.
 - Local test of the exact production stack: `docker-compose.prod.local.yml` (Caddy on
-  localhost:8443 with its internal CA, Mailpit instead of Gmail).
+  localhost:8443 with its internal CA, Mailpit instead of Gmail). The host-nginx variant:
+  `docker-compose.prod.local-nginx.yml`, running nginx:stable on the committed server block
+  (rendered by `deploy/nginx/render-local.sh` with only upstream and server_name changed).
 - How to deploy, and every production variable: `docs/DEPLOY.md`.
 - Run after every deploy to staging, through the real hostname: `docs/DEPLOY-CHECKLIST.md`.
 - What the Flutter developer gets (base URL, §8 decisions as implemented): `docs/HANDOVER-APP-DEV.md`.

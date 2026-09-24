@@ -1,14 +1,26 @@
-# Production / staging on one VPS: MongoDB (one-node replica set), the API, and Caddy for HTTPS.
-# Runbook: docs/VPS-RUNBOOK.md.
+# Production / staging on one VPS: MongoDB (one-node replica set) and the API, with a reverse
+# proxy terminating HTTPS in front. Runbook: docs/VPS-RUNBOOK.md.
 #
-#   docker compose -f docker-compose.prod.yml up -d --build
+# Two ways to run it:
 #
-# Configuration: .env.production for the API (see .env.production.example) and deploy/caddy.env
-# for Caddy (see deploy/caddy.env.example). Neither is committed.
-# Local test of this exact stack: docker-compose.prod.local.yml.
+#   - Server that already runs nginx (the staging VPS): host nginx + certbot terminate TLS, and
+#     the API is published on 127.0.0.1 only by docker-compose.prod.host-nginx.yml. ALWAYS go
+#     through the wrapper, so that override is never forgotten:
+#       ./deploy/dc.sh up -d --build
 #
-# ONLY Caddy publishes ports (80, 443). Docker's published ports bypass UFW, so a `ports:` entry
-# on any other service would put it on the internet whatever the firewall says.
+#   - Dedicated server with no web server: Caddy (profile "caddy") does HTTPS:
+#       docker compose -f docker-compose.prod.yml --profile caddy up -d --build
+#
+# A plain `up` never starts Caddy.
+#
+# Configuration: .env.production for the API (see .env.production.example); deploy/caddy.env for
+# Caddy (see deploy/caddy.env.example), only where Caddy runs. Neither is committed.
+# Local tests of this exact stack: docker-compose.prod.local.yml (Caddy) and
+# docker-compose.prod.local-nginx.yml (host-nginx config).
+#
+# Nothing in THIS file publishes a port except Caddy (80, 443). Docker's published ports bypass
+# UFW, so a `ports:` entry on mongo would put it on the internet whatever the firewall says; the
+# host-nginx override publishes the api on 127.0.0.1 only.
 
 x-logging: &logging
   driver: json-file
@@ -21,7 +33,8 @@ x-api-environment: &api-environment
   NODE_ENV: production
   PORT: 5000
   MONGODB_URL: mongodb://mongo:27017/hajjcare?replicaSet=rs0
-  # Exactly one proxy in front of the API: Caddy. Per-IP rate limits depend on this.
+  # Exactly one proxy in front of the API: Caddy, or the host's nginx. Per-IP rate limits depend
+  # on this.
   TRUST_PROXY: 1
 
 services:
@@ -82,7 +95,8 @@ services:
     restart: unless-stopped
     env_file: .env.production
     environment: *api-environment
-    # Reachable only by Caddy, on the compose network. NO `ports:`.
+    # Reachable only by Caddy on the compose network, or by host nginx through the 127.0.0.1-only
+    # port in docker-compose.prod.host-nginx.yml. NO `ports:` here.
     expose:
       - '5000'
     # Exactly one replica: the per-IP rate limiters count in memory (CLAUDE.md C6).
@@ -108,8 +122,11 @@ services:
 
   caddy:
     image: caddy:2
+    # Only for a server with no web server of its own: started only with `--profile caddy`.
+    # On a host that already runs nginx it could not bind 80/443 anyway.
+    profiles: ['caddy']
     restart: unless-stopped
-    # The ONLY published ports on this host.
+    # The ONLY published ports on a Caddy host.
     ports:
       - '80:80'
       - '443:443'

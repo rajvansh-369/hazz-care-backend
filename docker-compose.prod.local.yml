@@ -1,9 +1,12 @@
-# LOCAL TEST ONLY — never on the VPS. Runs docker-compose.prod.yml unchanged on a workstation:
+# LOCAL TEST ONLY — never on the VPS. Runs docker-compose.prod.yml unchanged on a workstation,
+# with Caddy (profile "caddy"):
 #
-#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d --build
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml --profile caddy up -d --build
 #   MAILPIT_URL=http://localhost:8025 NODE_TLS_REJECT_UNAUTHORIZED=0 \
 #     npm run contract -- https://localhost:8443/api/v1
-#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml down -v
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml --profile caddy down -v
+#
+# The host-nginx variant of this test (the staging VPS setup): docker-compose.prod.local-nginx.yml.
 #
 # Differences from production, and nothing else:
 #   - no .env.production and no deploy/caddy.env: local-only placeholder values below (never
