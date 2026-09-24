@@ -2,51 +2,53 @@
 
 const rateLimit = require('express-rate-limit');
 const config = require('../config/config');
-const ApiError = require('../utils/ApiError');
-const httpStatus = require('../utils/httpStatus');
 const errorCodes = require('../utils/errorCodes');
+const { sendJson } = require('../utils/respond');
 
-const buildLimiter = ({ windowMs, max, message, skipSuccessfulRequests = false }) =>
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Per-IP limiter factory for the auth routes that may be limited (CLAUDE.md A7):
+ * /refresh, /forgot-password and /verify-otp. Never /login, /register, /logout or
+ * /reset-password. Each route gets its own instance, attached to that route only.
+ *
+ * - Generous (RATE_LIMIT_IP_PER_HOUR): hundreds of pilgrims share one hotel NAT address.
+ * - Keyed on req.ip, which honours TRUST_PROXY.
+ * - Answers 429 {"code":"too_many_attempts"} as JSON, sent directly — never 401 or
+ *   403 (on /refresh that would sign the pilgrim out; on the reset routes the client
+ *   shows "That email and password do not match").
+ * - A failing store lets the request through (passOnStoreError): a broken limiter
+ *   must never become an outage.
+ *
+ * Tests build their own with a small limit and `skip: () => false`.
+ *
+ * @param {{ limit?: number, windowMs?: number, store?: object, skip?: Function }} [options]
+ */
+const createIpLimiter = ({
+  limit = config.rateLimit.ipPerHour,
+  windowMs = HOUR_MS,
+  store,
+  skip = () => config.isTest,
+} = {}) =>
   rateLimit({
     windowMs,
-    limit: max,
-    skipSuccessfulRequests,
+    limit,
+    keyGenerator: (req) => req.ip,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    // Rate limiting is a transport concern; disable it entirely under test so
-    // suites stay deterministic no matter how many requests they fire.
-    skip: () => config.isTest,
-    handler: (req, res, next) => {
-      next(new ApiError(httpStatus.TOO_MANY_REQUESTS, message, { code: errorCodes.RATE_LIMITED }));
-    },
+    passOnStoreError: true,
+    skip,
+    ...(store ? { store } : {}),
+    handler: (req, res) => sendJson(res, 429, { code: errorCodes.too_many_attempts }),
   });
 
-/** Broad limiter applied to the whole API surface. */
-const generalLimiter = buildLimiter({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.max,
-  message: 'Too many requests. Please slow down and try again later.',
-});
+const refreshLimiter = createIpLimiter();
+const forgotPasswordLimiter = createIpLimiter();
+const verifyOtpLimiter = createIpLimiter();
 
-/**
- * Tight limiter for credential endpoints. Successful requests are not counted,
- * so a legitimate user is never locked out by their own activity.
- */
-const authLimiter = buildLimiter({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.authMax,
-  skipSuccessfulRequests: true,
-  message: 'Too many authentication attempts. Please try again later.',
-});
-
-/**
- * OTP limiter: 5 attempts per 15 min per phone (per CLAUDE.md §4)
- */
-const otpLimiter = buildLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,
-  skipSuccessfulRequests: false,
-  message: 'Too many OTP attempts. Please try again in 15 minutes.',
-});
-
-module.exports = { generalLimiter, authLimiter, otpLimiter, buildLimiter };
+module.exports = {
+  createIpLimiter,
+  refreshLimiter,
+  forgotPasswordLimiter,
+  verifyOtpLimiter,
+};

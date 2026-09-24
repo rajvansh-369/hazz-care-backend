@@ -1,0 +1,151 @@
+# Production / staging on one VPS: MongoDB (one-node replica set) and the API, with a reverse
+# proxy terminating HTTPS in front. Runbook: docs/VPS-RUNBOOK.md.
+#
+# Two ways to run it:
+#
+#   - Server that already runs nginx (the staging VPS): host nginx + certbot terminate TLS, and
+#     the API is published on 127.0.0.1 only by docker-compose.prod.host-nginx.yml. ALWAYS go
+#     through the wrapper, so that override is never forgotten:
+#       ./deploy/dc.sh up -d --build
+#
+#   - Dedicated server with no web server: Caddy (profile "caddy") does HTTPS:
+#       docker compose -f docker-compose.prod.yml --profile caddy up -d --build
+#
+# A plain `up` never starts Caddy.
+#
+# Configuration: .env.production for the API (see .env.production.example); deploy/caddy.env for
+# Caddy (see deploy/caddy.env.example), only where Caddy runs. Neither is committed.
+# Local tests of this exact stack: docker-compose.prod.local.yml (Caddy) and
+# docker-compose.prod.local-nginx.yml (host-nginx config).
+#
+# Nothing in THIS file publishes a port except Caddy (80, 443). Docker's published ports bypass
+# UFW, so a `ports:` entry on mongo would put it on the internet whatever the firewall says; the
+# host-nginx override publishes the api on 127.0.0.1 only.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '5'
+
+# Set here, after env_file, so .env.production cannot change them.
+x-api-environment: &api-environment
+  NODE_ENV: production
+  PORT: 5000
+  MONGODB_URL: mongodb://mongo:27017/hajjcare?replicaSet=rs0
+  # Exactly one proxy in front of the API: Caddy, or the host's nginx. Per-IP rate limits depend
+  # on this.
+  TRUST_PROXY: 1
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    # NO `ports:` HERE. Docker's published ports bypass UFW: publishing 27017 would expose the
+    # database to the internet even with the firewall on. Only the services below reach it, on
+    # the compose network.
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *logging
+
+  # One-shot: initiates the replica set on first start and waits until this node is PRIMARY.
+  # Idempotent: an already-initiated set is left alone.
+  rs-init:
+    image: mongo:7
+    restart: 'no'
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command:
+      - mongosh
+      - --quiet
+      - --host
+      - mongo:27017
+      - --eval
+      - >-
+        try { rs.status(); print('replica set already initiated') }
+        catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }); print('replica set initiated') }
+        while (!db.hello().isWritablePrimary) { sleep(500) }
+        print('PRIMARY ready')
+    logging: *logging
+
+  # One-shot, on every `up`: makes the indexes match the schemas before the API takes traffic.
+  sync-indexes:
+    build: .
+    restart: 'no'
+    command: ['npm', 'run', 'db:sync-indexes']
+    env_file: .env.production
+    environment: *api-environment
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rs-init:
+        condition: service_completed_successfully
+    logging: *logging
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env.production
+    environment: *api-environment
+    # Reachable only by Caddy on the compose network, or by host nginx through the 127.0.0.1-only
+    # port in docker-compose.prod.host-nginx.yml. NO `ports:` here.
+    expose:
+      - '5000'
+    # Exactly one replica: the per-IP rate limiters count in memory (CLAUDE.md C6).
+    deploy:
+      replicas: 1
+    init: true
+    # Longer than the app's own 30-second shutdown backstop (src/shutdown.js).
+    stop_grace_period: 35s
+    depends_on:
+      sync-indexes:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 15s
+    logging: *logging
+
+  caddy:
+    image: caddy:2
+    # Only for a server with no web server of its own: started only with `--profile caddy`.
+    # On a host that already runs nginx it could not bind 80/443 anyway.
+    profiles: ['caddy']
+    restart: unless-stopped
+    # The ONLY published ports on a Caddy host.
+    ports:
+      - '80:80'
+      - '443:443'
+      # HTTP/3, which Caddy advertises in Alt-Svc. The app itself uses HTTP/1.1 or 2 over TCP.
+      - '443:443/udp'
+    # Only API_DOMAIN (the site address in deploy/Caddyfile). Never .env.production: Caddy has no
+    # business seeing the app's secrets.
+    env_file: deploy/caddy.env
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account. These MUST persist: re-issuing on every restart runs into
+      # Let's Encrypt's rate limits and can leave the API without a certificate for days.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    logging: *logging
+
+volumes:
+  mongo-data:
+  caddy-data:
+  caddy-config:

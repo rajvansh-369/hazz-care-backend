@@ -2,59 +2,34 @@
 
 const express = require('express');
 const { authController } = require('../../controllers');
-const { authValidation } = require('../../validations');
-const validate = require('../../middlewares/validate.middleware');
-const auth = require('../../middlewares/auth.middleware');
-const { authLimiter, otpLimiter } = require('../../middlewares/rateLimiter.middleware');
+const requireAuth = require('../../middlewares/auth.middleware');
+const {
+  refreshLimiter,
+  forgotPasswordLimiter,
+  verifyOtpLimiter,
+} = require('../../middlewares/rateLimiter.middleware');
+const errorCodes = require('../../utils/errorCodes');
+const { sendJson } = require('../../utils/respond');
 
 const router = express.Router();
 
-// ============================================================================
-// EMAIL/PASSWORD AUTH FLOW (Keep existing endpoints)
-// ============================================================================
+// The nine-endpoint contract: BACKEND_SPEC.md §3. Rules that live here:
+// - requireAuth is attached to GET /me ONLY, never with router.use() (CLAUDE.md A3).
+// - No generic Joi validate middleware: each handler maps bad input to the
+//   contract's specific codes (password_too_short, email_invalid, ...).
+// - No rate limiter on /login, /register, /logout or /reset-password, ever. Limiters are attached per
+//   route, never with router.use(), so a new route cannot inherit one (CLAUDE.md A7).
+router.post('/register', authController.register);
+router.post('/login', authController.login);
+router.post('/refresh', refreshLimiter, authController.refresh);
+router.post('/forgot-password', forgotPasswordLimiter, authController.forgotPassword);
+router.post('/verify-otp', verifyOtpLimiter, authController.verifyOtp);
+router.post('/reset-password', authController.resetPassword);
+router.post('/logout', authController.logout);
+router.get('/me', requireAuth, authController.me);
 
-router.post('/register', authLimiter, validate(authValidation.register), authController.register);
-router.post('/login', authLimiter, validate(authValidation.login), authController.login);
-router.post(
-  '/refresh-tokens',
-  validate(authValidation.refreshTokens),
-  authController.refreshTokens
-);
-router.post('/logout-all', auth(), authController.logoutAll);
-router.post(
-  '/forgot-password',
-  authLimiter,
-  validate(authValidation.forgotPassword),
-  authController.forgotPassword
-);
-router.post(
-  '/reset-password',
-  authLimiter,
-  validate(authValidation.resetPassword),
-  authController.resetPassword
-);
-router.post('/verify-email', validate(authValidation.verifyEmail), authController.verifyEmail);
-router.post(
-  '/change-password',
-  auth(),
-  validate(authValidation.changePassword),
-  authController.changePassword
-);
-
-// ============================================================================
-// OTP AUTH FLOW (Phone-first per CLAUDE.md §4)
-// ============================================================================
-
-router.post('/otp/request', otpLimiter, validate(authValidation.requestOtp), authController.requestOtp);
-router.post('/otp/verify', otpLimiter, validate(authValidation.verifyOtp), authController.verifyOtp);
-
-// ============================================================================
-// SHARED ENDPOINTS (Both auth methods)
-// ============================================================================
-
-router.post('/refresh', validate(authValidation.refresh), authController.refresh);
-router.post('/logout', validate(authValidation.logout), authController.logout);
-router.post('/devices', auth(), validate(authValidation.registerDevice), authController.registerDevice);
-router.get('/me', auth(), authController.me);
+// Catch-all: no path under the auth router may ever 404. The client shows any 404
+// as "We could not find an account for that email address" (BACKEND_SPEC.md §3.2).
+router.use((req, res) => sendJson(res, 503, { code: errorCodes.unavailable }));
 
 module.exports = router;

@@ -1,223 +1,150 @@
 'use strict';
 
 const config = require('../config/config');
-const { authService, tokenService, userService, emailService } = require('../services');
+const logger = require('../config/logger');
+const authService = require('../services/auth.service');
+const authValidation = require('../validations/auth.validation');
 const catchAsync = require('../utils/catchAsync');
-const ApiResponse = require('../utils/ApiResponse');
-const httpStatus = require('../utils/httpStatus');
-
-/** Client metadata attached to every issued session, useful for auditing. */
-const clientMeta = (req) => ({ ip: req.ip, userAgent: req.get('user-agent') || null });
+const errorCodes = require('../utils/errorCodes');
+const { sendJson, sendNoContent } = require('../utils/respond');
+const { toAuthSession, toAuthUser } = require('../utils/serialize');
 
 /**
- * Tokens returned to a client are only ever exposed in the JSON body; the refresh
- * token is additionally set as an httpOnly cookie for browser clients that want
- * one. Mobile clients (Flutter) simply ignore the cookie.
+ * HTTP only: validate, call the service, shape the response. Every handler reads
+ * its input through the validators, which accept any body (including none).
  */
-const setRefreshCookie = (res, tokens) => {
-  res.cookie('refreshToken', tokens.refresh.token, {
-    httpOnly: true,
-    secure: config.isProduction,
-    sameSite: 'strict',
-    expires: tokens.refresh.expires,
-    path: '/',
-  });
-};
-
-// ============================================================================
-// EMAIL/PASSWORD AUTH FLOW (Keep for backward compatibility)
-// ============================================================================
-
 const register = catchAsync(async (req, res) => {
-  const user = await authService.register(req.body);
-  const tokens = await tokenService.generateAuthTokens(user, clientMeta(req));
-  const verifyEmailToken = await tokenService.generateVerifyEmailToken(user);
-  await emailService.sendVerificationEmail(user.email, verifyEmailToken);
-
-  setRefreshCookie(res, tokens);
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.CREATED,
-    message: 'Account created',
-    data: {
-      user,
-      tokens,
-      ...(config.isProduction ? {} : { verifyEmailToken }),
-    },
-  });
+  const input = authValidation.register(req.body);
+  const { user, tokens } = await authService.register(input);
+  sendJson(res, 201, toAuthSession(tokens, user));
 });
 
 const login = catchAsync(async (req, res) => {
-  const { email, password } = req.body;
-  const user = await authService.loginUserWithEmailAndPassword(email, password);
-  const tokens = await tokenService.generateAuthTokens(user, clientMeta(req));
-
-  setRefreshCookie(res, tokens);
-  return ApiResponse.send(res, { message: 'Signed in', data: { user, tokens } });
+  const input = authValidation.login(req.body);
+  const { user, tokens } = await authService.login(input);
+  sendJson(res, 200, toAuthSession(tokens, user));
 });
 
-const refreshTokens = catchAsync(async (req, res) => {
-  const refreshToken = req.body.refreshToken || req.cookies.refreshToken;
-  const { user, tokens } = await authService.refreshAuth(refreshToken, clientMeta(req));
-
-  setRefreshCookie(res, tokens);
-  return ApiResponse.send(res, { message: 'Session refreshed', data: { user, tokens } });
-});
-
-const logoutAll = catchAsync(async (req, res) => {
-  await authService.logoutAll(req.principal.id);
-  res.clearCookie('refreshToken', { path: '/' });
-  return ApiResponse.send(res, { message: 'Signed out of every device', data: null });
-});
-
-const forgotPassword = catchAsync(async (req, res) => {
-  const { token, user } = await authService.forgotPassword(req.body.email);
-  if (token && user) {
-    await emailService.sendResetPasswordEmail(user.email, token);
-  }
-  return ApiResponse.send(res, {
-    message: 'If that email is registered, a reset link is on its way',
-    data: config.isProduction ? null : { resetToken: token },
+/** Logs an error by name, code and stack only — never a request body or token value. */
+const logFailure = (req, message, error) => {
+  logger.error(message, {
+    requestId: req.id,
+    errorName: error && error.name,
+    errorCode: error && error.code !== undefined ? String(error.code) : undefined,
+    stack: error && error.stack,
   });
-});
-
-const resetPassword = catchAsync(async (req, res) => {
-  await authService.resetPassword(req.body.token, req.body.password);
-  return ApiResponse.send(res, { message: 'Password updated, please sign in again', data: null });
-});
-
-const verifyEmail = catchAsync(async (req, res) => {
-  const user = await authService.verifyEmail(req.body.token);
-  return ApiResponse.send(res, { message: 'Email verified', data: { user } });
-});
-
-const changePassword = catchAsync(async (req, res) => {
-  await authService.changePassword(
-    req.principal.id,
-    req.body.currentPassword,
-    req.body.newPassword
-  );
-  res.clearCookie('refreshToken', { path: '/' });
-  return ApiResponse.send(res, {
-    message: 'Password changed, please sign in again',
-    data: null,
-  });
-});
-
-// ============================================================================
-// OTP AUTH FLOW (Phone-first, per CLAUDE.md §4)
-// ============================================================================
+};
 
 /**
- * OTP request: send 6-digit code to phone
- * 5-min TTL, max 5 attempts, 15-min lockout on phone + IP
- */
-const requestOtp = catchAsync(async (req, res) => {
-  const { phone, locale } = req.body;
-  const { challengeId, expiresIn } = await authService.requestOtp(phone, locale, clientMeta(req));
-
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.OK,
-    message: 'OTP sent to phone',
-    data: { challengeId, expiresIn },
-  });
-});
-
-/**
- * OTP verify: exchange challenge + code for tokens
- * Returns tokens + isNewUser flag for first-time signup
- */
-const verifyOtp = catchAsync(async (req, res) => {
-  const { challengeId, code } = req.body;
-  const { user, tokens, isNewUser } = await authService.verifyOtp(challengeId, code, clientMeta(req));
-
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.OK,
-    message: isNewUser ? 'Account created' : 'Signed in',
-    data: { accessToken: tokens.access.token, refreshToken: tokens.refresh.token, isNewUser },
-  });
-});
-
-/**
- * Refresh access token; returns rotated refresh token (single-use)
- * Reuse detection revokes whole device family + logs security event
+ * POST /auth/refresh — the ONLY response in the API that can sign a pilgrim out: a
+ * 401 or 403 with a JSON content type ends the session, even with no body (§3.5, §4).
+ * So every status is decided here, inside one try/catch, and nothing reaches the
+ * default error handler:
+ *
+ *   bad body            → 400 invalid_input   (not a sign-out)
+ *   genuinely dead token → 401 session_revoked (the only 401 on this route)
+ *   success             → 200 { tokens }      (no user key)
+ *   anything thrown     → 503 unavailable     (session untouched)
  */
 const refresh = catchAsync(async (req, res) => {
-  const { refreshToken } = req.body;
-  const { tokens } = await authService.refresh(refreshToken, clientMeta(req));
-
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.OK,
-    message: 'Session refreshed',
-    data: { accessToken: tokens.access.token, refreshToken: tokens.refresh.token },
-  });
+  try {
+    const refreshToken = authValidation.refresh(req.body);
+    if (refreshToken === null) {
+      return sendJson(res, 400, { code: errorCodes.invalid_input });
+    }
+    const pair = await authService.refresh(refreshToken);
+    if (pair === null) {
+      return sendJson(res, 401, { code: errorCodes.session_revoked });
+    }
+    return sendJson(res, 200, {
+      tokens: {
+        accessToken: pair.accessToken,
+        refreshToken: pair.refreshToken,
+        expiresIn: pair.expiresIn,
+      },
+    });
+  } catch (error) {
+    logFailure(req, 'POST /auth/refresh failed; answering 503 so the session survives', error);
+    if (res.headersSent) {
+      return undefined;
+    }
+    return sendJson(res, 503, { code: errorCodes.unavailable });
+  }
 });
 
 /**
- * Logout: revoke single device session
+ * POST /auth/logout — ALWAYS 204, no body (§3.9). The client has already cleared its
+ * session and does nothing with the answer; revocation is best effort.
  */
 const logout = catchAsync(async (req, res) => {
-  const { refreshToken } = req.body;
-  await authService.logout(refreshToken);
+  try {
+    const refreshToken = authValidation.logout(req.body);
+    if (refreshToken !== null) {
+      await authService.logout(refreshToken);
+    }
+  } catch (error) {
+    logFailure(req, 'POST /auth/logout could not revoke; answering 204 anyway', error);
+  }
+  if (res.headersSent) {
+    return undefined;
+  }
+  return sendNoContent(res);
+});
 
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.OK,
-    message: 'Signed out',
-    data: null,
-  });
+const waitUntil = (deadline) => {
+  const remaining = deadline - Date.now();
+  return remaining > 0 ? new Promise((resolve) => setTimeout(resolve, remaining)) : undefined;
+};
+
+/**
+ * POST /auth/forgot-password — 200 with a fresh { expiresInSeconds, resendAfterSeconds,
+ * codeLength } for every valid address. Whatever the outcome, it never answers sooner
+ * than FORGOT_PASSWORD_MIN_RESPONSE_MS after the request started, so timing cannot
+ * reveal whether an account exists (§3.6, §6).
+ */
+const forgotPassword = catchAsync(async (req, res) => {
+  const startedAt = Date.now();
+  let body;
+  try {
+    body = await authService.forgotPassword(authValidation.forgotPassword(req.body));
+  } finally {
+    await waitUntil(startedAt + config.otp.forgotPasswordMinResponseMs);
+  }
+  sendJson(res, 200, body);
+});
+
+/** POST /auth/verify-otp — 200 with exactly { resetToken, expiresInSeconds }. */
+const verifyOtp = catchAsync(async (req, res) => {
+  const input = authValidation.verifyOtp(req.body);
+  const { resetToken, expiresInSeconds } = await authService.verifyOtp(input);
+  sendJson(res, 200, { resetToken, expiresInSeconds });
 });
 
 /**
- * Register device: store push token + platform for notifications
- * Called after login
+ * POST /auth/reset-password — 204, no body, no tokens. The token is checked before the
+ * password, so a dead token is reported first (§3.8).
  */
-const registerDevice = catchAsync(async (req, res) => {
-  const { pushToken, platform, appVersion, locale } = req.body;
-  const userId = req.principal.id;
-
-  await authService.registerDevice(userId, {
-    pushToken,
-    platform,
-    appVersion,
-    locale,
-  });
-
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.OK,
-    message: 'Device registered',
-    data: null,
-  });
+const resetPassword = catchAsync(async (req, res) => {
+  const resetToken = authValidation.resetToken(req.body);
+  await authService.assertUsableResetToken(resetToken);
+  const password = authValidation.newPassword(req.body);
+  await authService.resetPassword(resetToken, password);
+  sendNoContent(res);
 });
 
-/**
- * Get current user profile + journey summary + entitlement
- * Required for POST /auth/me
- */
+/** A bare AuthUser, not { user }, and nothing else (BACKEND_SPEC.md §3.10). */
 const me = catchAsync(async (req, res) => {
-  const userId = req.principal.id;
-  const { user, journey, entitlement } = await authService.getMe(userId);
-
-  return ApiResponse.send(res, {
-    statusCode: httpStatus.OK,
-    message: 'Current user',
-    data: { user, journey, entitlement },
-  });
+  const user = await authService.getMe(req.auth.userId);
+  sendJson(res, 200, toAuthUser(user));
 });
 
 module.exports = {
-  // Email/password flow
   register,
   login,
-  refreshTokens,
-  logoutAll,
-  forgotPassword,
-  resetPassword,
-  verifyEmail,
-  changePassword,
-  // OTP flow
-  requestOtp,
-  verifyOtp,
   refresh,
+  forgotPassword,
+  verifyOtp,
+  resetPassword,
   logout,
-  registerDevice,
   me,
 };

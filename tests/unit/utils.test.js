@@ -1,84 +1,104 @@
 'use strict';
 
 const ApiError = require('../../src/utils/ApiError');
-const ApiResponse = require('../../src/utils/ApiResponse');
-const catchAsync = require('../../src/utils/catchAsync');
-const pick = require('../../src/utils/pick');
-const httpStatus = require('../../src/utils/httpStatus');
 const errorCodes = require('../../src/utils/errorCodes');
+const catchAsync = require('../../src/utils/catchAsync');
+const { sendJson, sendNoContent } = require('../../src/utils/respond');
 
-describe('ApiError', () => {
-  test('defaults to an operational error with an internal code', () => {
-    const error = new ApiError(httpStatus.BAD_REQUEST, 'Nope');
-    expect(error).toBeInstanceOf(Error);
-    expect(error.statusCode).toBe(400);
-    expect(error.isOperational).toBe(true);
-    expect(error.code).toBe(errorCodes.INTERNAL_ERROR);
-    expect(error.details).toEqual([]);
-    expect(error.stack).toEqual(expect.any(String));
-  });
-
-  test('carries a code and field level details', () => {
-    const details = [{ field: 'email', message: 'is required' }];
-    const error = new ApiError(400, 'Invalid', { code: errorCodes.VALIDATION_ERROR, details });
-    expect(error.code).toBe('VALIDATION_ERROR');
-    expect(error.details).toEqual(details);
-  });
-
-  test('preserves a supplied stack when re-wrapping', () => {
-    const error = new ApiError(500, 'Wrapped', { stack: 'original-stack' });
-    expect(error.stack).toBe('original-stack');
-  });
-
-  test.each([
-    ['badRequest', 400, errorCodes.VALIDATION_ERROR],
-    ['unauthorized', 401, errorCodes.UNAUTHENTICATED],
-    ['forbidden', 403, errorCodes.FORBIDDEN],
-    ['notFound', 404, errorCodes.RESOURCE_NOT_FOUND],
-    ['conflict', 409, errorCodes.DUPLICATE_RESOURCE],
-  ])('%s() builds a %d', (factory, status, code) => {
-    const error = ApiError[factory]();
-    expect(error.statusCode).toBe(status);
-    expect(error.code).toBe(code);
-    expect(error.isOperational).toBe(true);
-  });
-
-  test('internal() is flagged non-operational so it is scrubbed in production', () => {
-    expect(ApiError.internal().isOperational).toBe(false);
+describe('errorCodes', () => {
+  test('is exactly the client contract codes, all lowercase', () => {
+    expect(Object.values(errorCodes).sort()).toEqual(
+      [
+        'email_taken',
+        'invalid_credentials',
+        'account_not_found',
+        'invalid_reset_token',
+        'too_many_attempts',
+        'otp_expired',
+        'invalid_otp',
+        'invalid_input',
+        'password_too_short',
+        'email_invalid',
+        'session_revoked',
+        'unauthorized',
+        'unavailable',
+        'not_found',
+      ].sort()
+    );
   });
 });
 
-describe('ApiResponse', () => {
+describe('ApiError', () => {
+  test.each([
+    ['emailTaken', 409, 'email_taken', [{ field: 'email', code: 'email_taken' }]],
+    ['invalidCredentials', 401, 'invalid_credentials', []],
+    ['passwordTooShort', 422, 'invalid_input', [{ field: 'password', code: 'password_too_short' }]],
+    ['emailInvalid', 422, 'invalid_input', [{ field: 'email', code: 'email_invalid' }]],
+    ['invalidOtp', 400, 'invalid_otp', [{ field: 'code', code: 'invalid_otp' }]],
+    ['otpExpired', 400, 'otp_expired', [{ field: 'code', code: 'otp_expired' }]],
+    ['invalidResetToken', 400, 'invalid_reset_token', [{ field: 'resetToken', code: 'invalid_reset_token' }]],
+    ['tooManyAttempts', 429, 'too_many_attempts', []],
+    ['unauthorized', 401, 'unauthorized', []],
+  ])('%s() → %d %s', (factory, status, code, fieldErrors) => {
+    const error = ApiError[factory]();
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.status).toBe(status);
+    expect(error.code).toBe(code);
+    expect(error.fieldErrors).toEqual(fieldErrors);
+  });
+
+  test('never produces 403 or 500', () => {
+    const factories = Object.getOwnPropertyNames(ApiError).filter((name) => typeof ApiError[name] === 'function');
+    factories.forEach((name) => expect([403, 500]).not.toContain(ApiError[name]().status));
+  });
+
+  test('has no factory for 404, 503 or session_revoked (removed: nothing may throw them)', () => {
+    // 404 under /auth lies to the pilgrim; the refresh route sends its own 401; 503
+    // comes only from the error handler's default. A factory invites misuse.
+    ['notFound', 'unavailable', 'sessionRevoked', 'invalidInput'].forEach((name) =>
+      expect(ApiError[name]).toBeUndefined()
+    );
+  });
+
+  test('ignores fieldErrors that are not an array', () => {
+    expect(new ApiError(400, 'invalid_input', { field: 'x' }).fieldErrors).toEqual([]);
+  });
+});
+
+describe('respond', () => {
   const mockRes = () => {
-    const res = { req: { id: 'req-1' } };
+    const res = {};
     res.status = jest.fn().mockReturnValue(res);
     res.json = jest.fn().mockReturnValue(res);
+    res.end = jest.fn().mockReturnValue(res);
     return res;
   };
 
-  test('wraps data in the standard envelope', () => {
+  test('sendJson writes a plain object with the status', () => {
     const res = mockRes();
-    ApiResponse.send(res, { data: { a: 1 }, message: 'Done' });
+    sendJson(res, 200, { tokens: {} });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({
-      success: true,
-      message: 'Done',
-      data: { a: 1 },
-      requestId: 'req-1',
-    });
+    expect(res.json).toHaveBeenCalledWith({ tokens: {} });
   });
 
-  test('includes meta only when supplied', () => {
-    const res = mockRes();
-    ApiResponse.send(res, { data: [], meta: { page: 1 } });
-    expect(res.json.mock.calls[0][0].meta).toEqual({ page: 1 });
+  test.each([
+    ['an array', []],
+    ['null', null],
+    ['a string', 'ok'],
+    ['a class instance', new Date()],
+    ['an envelope with success', { success: true }],
+    ['an envelope with data', { data: {} }],
+  ])('sendJson refuses %s', (_label, body) => {
+    expect(() => sendJson(mockRes(), 200, body)).toThrow(TypeError);
   });
 
-  test('omits requestId when there is none', () => {
+  test('sendNoContent sends 204 with no body', () => {
     const res = mockRes();
-    res.req = undefined;
-    ApiResponse.send(res, { data: null });
-    expect(res.json.mock.calls[0][0]).not.toHaveProperty('requestId');
+    sendNoContent(res);
+    expect(res.status).toHaveBeenCalledWith(204);
+    expect(res.end).toHaveBeenCalledWith();
+    expect(res.json).not.toHaveBeenCalled();
   });
 });
 
@@ -110,30 +130,3 @@ describe('catchAsync', () => {
   });
 });
 
-describe('pick', () => {
-  test('keeps only the requested keys', () => {
-    expect(pick({ a: 1, b: 2, c: 3 }, ['a', 'c'])).toEqual({ a: 1, c: 3 });
-  });
-
-  test('drops undefined values and missing keys', () => {
-    expect(pick({ a: undefined, b: 2 }, ['a', 'b', 'z'])).toEqual({ b: 2 });
-  });
-
-  test('does not pick inherited properties', () => {
-    const parent = { inherited: 'yes' };
-    const child = Object.create(parent);
-    child.own = 'mine';
-    expect(pick(child, ['inherited', 'own'])).toEqual({ own: 'mine' });
-  });
-
-  test('tolerates a nullish source', () => {
-    expect(pick(undefined, ['a'])).toEqual({});
-  });
-});
-
-describe('httpStatus', () => {
-  test('maps codes to messages', () => {
-    expect(httpStatus.getStatusMessage(404)).toBe('Not Found');
-    expect(httpStatus.getStatusMessage(599)).toBe('Unknown Status');
-  });
-});

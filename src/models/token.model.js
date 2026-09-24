@@ -1,19 +1,26 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const { tokenTypes } = require('../config');
 const { toJSON } = require('./plugins');
 
+const REVOKED_REASONS = ['LOGOUT', 'ROTATED', 'PASSWORD_RESET', 'ADMIN'];
+
 /**
- * Refresh / reset / verification tokens are persisted as SHA-256 hashes so a
- * database leak cannot be replayed against the API.
+ * Refresh and reset tokens. Only the hash is stored; the raw token never touches the
+ * database (CLAUDE.md A8, C3).
+ *
+ * Refresh rotation (CLAUDE.md A10 rule l): the old token records `replacedBy` and
+ * `rotatedAt`, and stays usable for REFRESH_ROTATION_GRACE_SECONDS measured from
+ * `rotatedAt`. `familyId` links every token descended from one sign-in.
+ *
+ * Reset tokens are single use: `consumedAt` is set atomically when one is spent.
  */
 const tokenSchema = new mongoose.Schema(
   {
-    token: {
+    tokenHash: {
       type: String,
       required: true,
-      index: true,
+      unique: true,
       private: true,
     },
     user: {
@@ -24,25 +31,56 @@ const tokenSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: Object.values(tokenTypes),
+      enum: ['refresh', 'resetPassword'],
       required: true,
     },
-    expires: {
+    familyId: {
+      type: String,
+      index: true,
+    },
+    expiresAt: {
       type: Date,
       required: true,
     },
-    blacklisted: {
-      type: Boolean,
-      default: false,
+    // Garbage-collection time only. The service sets it to expiresAt + 7 days (refresh)
+    // or expiresAt + 24 hours (reset). Expiry is always checked in code against expiresAt.
+    purgeAt: {
+      type: Date,
+      required: true,
     },
-    ip: { type: String, default: null },
-    userAgent: { type: String, default: null },
+    rotatedAt: {
+      type: Date,
+      default: null,
+    },
+    replacedBy: {
+      type: mongoose.SchemaTypes.ObjectId,
+      ref: 'Token',
+      default: null,
+    },
+    revokedAt: {
+      type: Date,
+      default: null,
+    },
+    revokedReason: {
+      type: String,
+      enum: [...REVOKED_REASONS, null],
+      default: null,
+    },
+    consumedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
+
+// TTL on purgeAt, never on expiresAt (CLAUDE.md A8 point 4, A11). TTL deletion is lazy
+// (roughly once a minute): it is garbage collection, not the expiry mechanism.
+tokenSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });
 
 tokenSchema.plugin(toJSON);
 
 const Token = mongoose.model('Token', tokenSchema);
 
 module.exports = Token;
+module.exports.REVOKED_REASONS = REVOKED_REASONS;

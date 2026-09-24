@@ -4,37 +4,25 @@ const app = require('./app');
 const config = require('./config/config');
 const logger = require('./config/logger');
 const database = require('./config/database');
+const emailService = require('./services/email.service');
+const revenueCatService = require('./services/revenueCat.service');
+const { createShutdown } = require('./shutdown');
 
 let server;
 
-const shutdown = async (signal, exitCode = 0) => {
-  logger.info(`${signal} received, shutting down gracefully`);
-  const forceExit = setTimeout(() => {
-    logger.error('Graceful shutdown timed out, forcing exit');
-    process.exit(1);
-  }, 10000);
-  forceExit.unref();
+// Work that runs after its request has been answered, and must settle before exit.
+const background = { idle: () => Promise.all([emailService.idle(), revenueCatService.idle()]) };
 
-  try {
-    if (server) {
-      await new Promise((resolve) => server.close(resolve));
-      logger.info('HTTP server closed');
-    }
-    await database.disconnect();
-    logger.info('MongoDB connection closed');
-    clearTimeout(forceExit);
-    process.exit(exitCode);
-  } catch (error) {
-    logger.error(`Error during shutdown: ${error.message}`);
-    process.exit(1);
-  }
-};
+const shutdown = createShutdown({ getServer: () => server, background, database, logger });
 
 const start = async () => {
   await database.connect();
   server = app.listen(config.port, () => {
     logger.info(`${config.serviceName} listening on port ${config.port} [${config.env}]`);
   });
+  // Webhook events a previous process stored but never processed. In the background:
+  // never delays startup or the health check.
+  revenueCatService.recoverStranded();
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
 

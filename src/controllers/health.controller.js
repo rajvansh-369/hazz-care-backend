@@ -2,19 +2,13 @@
 
 const { healthService } = require('../services');
 const catchAsync = require('../utils/catchAsync');
-const ApiResponse = require('../utils/ApiResponse');
-const httpStatus = require('../utils/httpStatus');
+const { sendJson } = require('../utils/respond');
 
-const live = (req, res) =>
-  ApiResponse.send(res, { message: 'Service is live', data: healthService.liveness() });
+const live = (req, res) => sendJson(res, 200, { status: 'live' });
 
 const ready = catchAsync(async (req, res) => {
   const report = await healthService.readiness();
-  return ApiResponse.send(res, {
-    statusCode: report.status === 'ready' ? httpStatus.OK : httpStatus.SERVICE_UNAVAILABLE,
-    message: report.status === 'ready' ? 'Service is ready' : 'Service is not ready',
-    data: report,
-  });
+  sendJson(res, report.status === 'ready' ? 200 : 503, report);
 });
 
 module.exports = { live, ready };

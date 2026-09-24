@@ -1,0 +1,54 @@
+# LOCAL TEST ONLY — never on the VPS. Runs docker-compose.prod.yml unchanged on a workstation,
+# with Caddy (profile "caddy"):
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml --profile caddy up -d --build
+#   MAILPIT_URL=http://localhost:8025 NODE_TLS_REJECT_UNAUTHORIZED=0 \
+#     npm run contract -- https://localhost:8443/api/v1
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml --profile caddy down -v
+#
+# The host-nginx variant of this test (the staging VPS setup): docker-compose.prod.local-nginx.yml.
+#
+# Differences from production, and nothing else:
+#   - no .env.production and no deploy/caddy.env: local-only placeholder values below (never
+#     reuse them anywhere);
+#   - API_DOMAIN=localhost, so Caddy issues a certificate from its own internal CA (hence
+#     NODE_TLS_REJECT_UNAUTHORIZED=0 for the local contract run only);
+#   - SMTP goes to Mailpit instead of Gmail (UI on 127.0.0.1:8025, for the checker);
+#   - Caddy is published on host ports 8080/8443 (LOCAL_HTTP_PORT / LOCAL_HTTPS_PORT), because
+#     80/443 are often taken on a workstation.
+
+x-local-secrets: &local-secrets
+  JWT_ACCESS_SECRET: local-only-placeholder-jwt-access-secret-0000
+  OTP_HMAC_SECRET: local-only-placeholder-otp-hmac-secret-000000
+  RC_WEBHOOK_SECRET: local-only-placeholder-rc-webhook-secret-0000
+  EMAIL_PROVIDER: smtp
+  SMTP_URL: smtp://mailpit:1025
+  EMAIL_FROM: HajjCare Local <no-reply@hajjcare.local>
+  LOG_LEVEL: info
+
+services:
+  sync-indexes:
+    env_file: !reset []
+    environment: *local-secrets
+
+  api:
+    env_file: !reset []
+    environment: *local-secrets
+    depends_on:
+      mailpit:
+        condition: service_started
+
+  caddy:
+    # Instead of deploy/caddy.env.
+    env_file: !reset []
+    environment:
+      API_DOMAIN: localhost
+    ports: !override
+      - '${LOCAL_HTTP_PORT:-8080}:80'
+      - '${LOCAL_HTTPS_PORT:-8443}:443'
+      - '${LOCAL_HTTPS_PORT:-8443}:443/udp'
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - '127.0.0.1:8025:8025'

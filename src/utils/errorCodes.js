@@ -1,27 +1,24 @@
 'use strict';
 
 /**
- * Stable, machine readable error codes. Clients (including the Flutter app)
- * should branch on these instead of on human readable messages.
+ * The complete set of error codes this API may put on the wire. They are the
+ * lowercase codes the Flutter client switches on (BACKEND_SPEC.md §3.2), plus
+ * three transport codes. Adding a code is safe; renaming or removing one changes
+ * app behaviour and needs a client release.
  */
-module.exports = {
-  VALIDATION_ERROR: 'VALIDATION_ERROR',
-  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
-  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
-  ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
-  EMAIL_ALREADY_EXISTS: 'EMAIL_ALREADY_EXISTS',
-  DUPLICATE_RESOURCE: 'DUPLICATE_RESOURCE',
-  UNAUTHENTICATED: 'UNAUTHENTICATED',
-  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
-  TOKEN_INVALID: 'TOKEN_INVALID',
-  FORBIDDEN: 'FORBIDDEN',
-  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
-  ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
-  RATE_LIMITED: 'RATE_LIMITED',
-  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
-  UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
-  DATABASE_ERROR: 'DATABASE_ERROR',
-  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
-  GATEWAY_TIMEOUT: 'GATEWAY_TIMEOUT',
-  INTERNAL_ERROR: 'INTERNAL_ERROR',
-};
+module.exports = Object.freeze({
+  email_taken: 'email_taken',
+  invalid_credentials: 'invalid_credentials',
+  account_not_found: 'account_not_found',
+  invalid_reset_token: 'invalid_reset_token',
+  too_many_attempts: 'too_many_attempts',
+  otp_expired: 'otp_expired',
+  invalid_otp: 'invalid_otp',
+  invalid_input: 'invalid_input',
+  password_too_short: 'password_too_short',
+  email_invalid: 'email_invalid',
+  session_revoked: 'session_revoked',
+  unauthorized: 'unauthorized',
+  unavailable: 'unavailable',
+  not_found: 'not_found',
+});

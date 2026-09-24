@@ -1,64 +1,52 @@
 'use strict';
 
-const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const compression = require('compression');
-const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
-const hpp = require('hpp');
 
 const config = require('./config/config');
 const morgan = require('./config/morgan');
 const routes = require('./routes/v1');
 const requestId = require('./middlewares/requestId.middleware');
-const { generalLimiter } = require('./middlewares/rateLimiter.middleware');
-const { errorConverter, errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
+const { errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
 
 const app = express();
 
-// Honour X-Forwarded-* from exactly `trustProxy` hops (the gateway, by default).
-// A fixed number rather than `true` keeps client IPs unspoofable.
-app.set('trust proxy', config.trustProxy);
-app.set('etag', 'strong');
+// 1. Platform settings. No ETags: a 304 with an empty body would fail the client's
+// parser. No redirects anywhere, no static files.
 app.disable('x-powered-by');
+app.set('etag', false);
+// Disabling ETags is not enough: Express still answers 304 to `If-None-Match: *`
+// on a GET (e.g. /auth/me), because `*` matches without an ETag. Conditional
+// requests are never honoured here, so drop the headers before anything reads them.
+app.use((req, res, next) => {
+  delete req.headers['if-none-match'];
+  delete req.headers['if-modified-since'];
+  next();
+});
+// Honour X-Forwarded-* from exactly `trustProxy` hops (0 = no reverse proxy).
+app.set('trust proxy', config.trustProxy);
 
-// 1. Correlation id first, so every later log line and error carries it.
+// 2. Correlation id first; it is echoed in the X-Request-Id response header so an
+// error body never has to carry it.
 app.use(requestId);
 
-// 2. Request logging.
+// 3. Request line logging: method, URL, status, time. Never bodies.
 if (morgan.enabled) {
   app.use(morgan.successHandler);
   app.use(morgan.errorHandler);
 }
 
-// 3. Security headers. `unsafe-inline` styles are allowed only because the
-// bundled Swagger UI needs them; the API itself serves no HTML.
+// 4. Security headers.
 app.use(
   helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        baseUri: ["'self'"],
-        frameAncestors: ["'none'"],
-        objectSrc: ["'none'"],
-        imgSrc: ["'self'", 'data:'],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        // Helmet enables this by default; over plain http on a LAN address it
-        // would upgrade the page's own assets to https and break them.
-        upgradeInsecureRequests: config.isProduction ? [] : null,
-      },
-    },
-    crossOriginEmbedderPolicy: false,
-    referrerPolicy: { policy: 'no-referrer' },
     hsts: config.isProduction ? { maxAge: 15552000, includeSubDomains: true } : false,
   })
 );
 
-// 4. CORS. `origin: true` reflects the caller's origin, which (unlike `*`) is
-// compatible with credentialed requests from the Flutter web build.
+// 5. CORS. Credentials are off: the client sends a bearer header and no cookies.
 const corsOptions = {
   origin:
     config.corsOrigins === '*'
@@ -69,40 +57,40 @@ const corsOptions = {
           }
           return callback(new Error('Origin not allowed by CORS policy'));
         },
-  credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: false,
+  methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
-  exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy'],
+  exposedHeaders: ['X-Request-Id'],
   maxAge: 600,
 };
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
-// 5. Body parsing with a hard size ceiling.
-app.use(express.json({ limit: config.bodyLimit }));
-app.use(express.urlencoded({ extended: true, limit: config.bodyLimit }));
-app.use(cookieParser());
+// 6. RevenueCat webhook (CLAUDE.md A5, BACKEND_SPEC.md §6b), BEFORE express.json():
+// its router reads the raw request bytes, which the HMAC signature is computed over.
+// Server-to-server and outside the auth router, so the /auth status rules do not
+// apply; it answers only 200, 400, 401 or 503.
+app.use(`${config.apiPrefix}/webhooks`, require('./routes/v1/webhook.route'));
 
-// 6. Payload hygiene: strip Mongo operators, collapse duplicated query keys.
+// 7. JSON body parsing with a hard ceiling. Malformed JSON → 400 and oversized
+// bodies → 413, both {"code":"invalid_input"}, via the error handler.
+app.use(express.json({ limit: '32kb' }));
+
+// 8. Payload hygiene: strip Mongo operators ($gt, $where, ...) from bodies and queries.
 app.use(mongoSanitize({ replaceWith: '_' }));
-app.use(hpp({ whitelist: ['sortBy', 'status'] }));
 
-// 7. Response compression.
+// 9. Response compression.
 app.use(compression());
 
-// Probes are exposed at the root as well, so orchestrators do not need to know
-// the API prefix.
+// 10. Health probes at the root as well, so orchestrators need not know the prefix.
 app.use('/health', require('./routes/v1/health.route'));
 
-// 8. Versioned API behind the shared rate limiter.
-app.use(config.apiPrefix, generalLimiter, routes);
+// 11. Versioned API: /health and /auth. The auth router ends in its own 503 catch-all.
+app.use(config.apiPrefix, routes);
 
-// Optional static assets (the test console is normally served by the gateway).
-app.use('/public', express.static(path.join(__dirname, '../public'), { maxAge: '1h' }));
-
-// 9. Unmatched routes and the terminal error pipeline.
+// 12. Everything else (outside the auth router) → 404 {"code":"not_found"}.
 app.use(notFoundHandler);
-app.use(errorConverter);
+
+// 13. The error handler, last.
 app.use(errorHandler);
 
 module.exports = app;

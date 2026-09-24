@@ -1,279 +1,223 @@
 'use strict';
 
-const { Token, User } = require('../models');
+const mongoose = require('mongoose');
 const config = require('../config/config');
-const tokenTypes = require('../config/tokenTypes');
-const userService = require('./user.service');
-const tokenService = require('./token.service');
+const { User } = require('../models');
 const ApiError = require('../utils/ApiError');
-const httpStatus = require('../utils/httpStatus');
-const errorCodes = require('../utils/errorCodes');
+const emailService = require('./email.service');
+const otpService = require('./otp.service');
+const passwordService = require('./password.service');
+const sendLimitService = require('./sendLimit.service');
+const tokenService = require('./token.service');
 
-const INVALID_CREDENTIALS = () =>
-  new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect email or password', {
-    code: errorCodes.INVALID_CREDENTIALS,
-  });
+const DUPLICATE_KEY = 11000;
+
+/** An E11000 on the users.email index, and nothing else, means "already registered". */
+const isDuplicateEmail = (error) =>
+  Boolean(
+    error &&
+      error.code === DUPLICATE_KEY &&
+      ((error.keyPattern && Object.prototype.hasOwnProperty.call(error.keyPattern, 'email')) ||
+        (error.keyValue && Object.prototype.hasOwnProperty.call(error.keyValue, 'email')))
+  );
 
 /**
- * Authenticates a user, applying brute force protection and account state checks.
- * The same generic message is returned for unknown emails and wrong passwords so
- * the endpoint cannot be used to enumerate accounts.
+ * Creates the account and its first session in one transaction: a user without a
+ * session, or a session without a user, cannot be left behind.
  *
- * @param {string} email
- * @param {string} password
- * @returns {Promise<User>}
+ * A duplicate is detected only by the unique index (never check-then-insert), so two
+ * simultaneous registrations for one address cannot both succeed.
+ *
+ * @param {{ email: string, password: string, fullName: string|null }} input validated
+ * @returns {Promise<{ user: object, tokens: object }>}
  */
-const loginUserWithEmailAndPassword = async (email, password) => {
-  const user = await userService.getUserByEmail(email, true);
+const register = async ({ email, password, fullName }) => {
+  const passwordHash = await passwordService.hash(password);
+  const session = await mongoose.startSession();
+  try {
+    let result = null;
+    await session.withTransaction(async () => {
+      result = null;
+      const [user] = await User.create([{ email, passwordHash, fullName }], { session });
+      const tokens = await tokenService.issuePair(user._id, { session });
+      result = { user, tokens };
+    });
+    return result;
+  } catch (error) {
+    if (isDuplicateEmail(error)) {
+      throw ApiError.emailTaken();
+    }
+    // Any other duplicate key (a token hash collision, say) is not "that email
+    // already has an account": it propagates and becomes a 503.
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * Unknown address and wrong password are indistinguishable: same status, same body,
+ * and the unknown path verifies against a dummy argon2id hash so it costs the same.
+ * No lockout and no rate limit (BACKEND_SPEC.md §3.4).
+ *
+ * @param {{ email: string, password: string }} input validated, email normalised
+ * @returns {Promise<{ user: object, tokens: object }>}
+ */
+const login = async ({ email, password }) => {
+  const user = await User.findOne({ email }).select('+passwordHash');
+
   if (!user) {
-    throw INVALID_CREDENTIALS();
+    await passwordService.verify(await passwordService.getDummyHash(), password);
+    throw ApiError.invalidCredentials();
+  }
+  if (!(await passwordService.verify(user.passwordHash, password))) {
+    throw ApiError.invalidCredentials();
   }
 
-  if (!user.isActive) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'This account has been deactivated', {
-      code: errorCodes.ACCOUNT_DISABLED,
-    });
-  }
-
-  if (user.isLocked()) {
-    throw new ApiError(
-      httpStatus.FORBIDDEN,
-      `Account locked after too many failed attempts. Try again in ${config.security.loginLockMinutes} minutes`,
-      { code: errorCodes.ACCOUNT_LOCKED }
-    );
-  }
-
-  const isMatch = await user.isPasswordMatch(password);
-  if (!isMatch) {
-    await user.registerFailedLogin();
-    throw INVALID_CREDENTIALS();
-  }
-
-  await user.registerSuccessfulLogin();
-  user.password = undefined;
-  return user;
-};
-
-/**
- * @param {object} userBody
- * @returns {Promise<User>}
- */
-const register = async (userBody) => userService.createUser(userBody);
-
-/**
- * @param {string} refreshToken
- * @returns {Promise<void>}
- */
-const logout = async (refreshToken) => {
-  const tokenDoc = await Token.findOne({
-    token: tokenService.hashToken(refreshToken),
-    type: tokenTypes.REFRESH,
-    blacklisted: false,
-  });
-  if (!tokenDoc) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'Session not found or already ended', {
-      code: errorCodes.TOKEN_INVALID,
-    });
-  }
-  await Token.deleteOne({ _id: tokenDoc._id });
-};
-
-/**
- * @param {string} userId
- * @returns {Promise<void>}
- */
-const logoutAll = async (userId) => tokenService.revokeAllUserTokens(userId);
-
-/**
- * Rotates a refresh token: the presented token is destroyed and a brand new pair
- * is issued, so a stolen refresh token is usable at most once.
- *
- * @param {string} refreshToken
- * @param {object} [meta]
- * @returns {Promise<{user: User, tokens: object}>}
- */
-const refreshAuth = async (refreshToken, meta = {}) => {
-  const refreshTokenDoc = await tokenService.verifyStoredToken(refreshToken, tokenTypes.REFRESH);
-  const user = await userService.getUserById(refreshTokenDoc.user);
-  if (!user || !user.isActive) {
-    await Token.deleteOne({ _id: refreshTokenDoc._id });
-    throw new ApiError(httpStatus.UNAUTHORIZED, 'Session is no longer valid', {
-      code: errorCodes.TOKEN_INVALID,
-    });
-  }
-  await Token.deleteOne({ _id: refreshTokenDoc._id });
-  const tokens = await tokenService.generateAuthTokens(user, meta);
+  user.lastLoginAt = new Date();
+  await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: user.lastLoginAt } });
+  const tokens = await tokenService.issuePair(user._id);
   return { user, tokens };
 };
 
 /**
- * @param {string} email
- * @returns {Promise<{token: string|null, user: User|null}>}
+ * @param {string} userId from a verified access token's `sub`
+ * @returns {Promise<object>} the user
+ * @throws {ApiError} 401 unauthorized when the id is malformed or the user is gone —
+ *   never a CastError (503) and never a 404
  */
-const forgotPassword = async (email) => {
-  const user = await userService.getUserByEmail(email);
-  if (!user || !user.isActive) {
-    // Silently succeed so the endpoint cannot confirm which emails exist.
-    return { token: null, user: null };
+const getMe = async (userId) => {
+  if (!mongoose.isValidObjectId(userId)) {
+    throw ApiError.unauthorized();
   }
-  const token = await tokenService.generateResetPasswordToken(user);
-  return { token, user };
-};
-
-/**
- * @param {string} resetPasswordToken
- * @param {string} newPassword
- * @returns {Promise<void>}
- */
-const resetPassword = async (resetPasswordToken, newPassword) => {
-  const tokenDoc = await tokenService.verifyStoredToken(
-    resetPasswordToken,
-    tokenTypes.RESET_PASSWORD
-  );
-  const user = await userService.getUserByIdOrFail(tokenDoc.user);
-
-  user.password = newPassword;
-  user.loginAttempts = 0;
-  user.lockUntil = null;
-  await user.save();
-
-  await Token.deleteMany({ user: user.id, type: tokenTypes.RESET_PASSWORD });
-  await tokenService.revokeAllUserTokens(user.id);
-};
-
-/**
- * @param {string} verifyEmailToken
- * @returns {Promise<User>}
- */
-const verifyEmail = async (verifyEmailToken) => {
-  const tokenDoc = await tokenService.verifyStoredToken(verifyEmailToken, tokenTypes.VERIFY_EMAIL);
-  const user = await userService.getUserByIdOrFail(tokenDoc.user);
-  user.isEmailVerified = true;
-  await user.save();
-  await Token.deleteMany({ user: user.id, type: tokenTypes.VERIFY_EMAIL });
+  const user = await User.findById(userId);
+  if (!user) {
+    throw ApiError.unauthorized();
+  }
   return user;
 };
 
 /**
- * @param {string} userId
- * @param {string} currentPassword
- * @param {string} newPassword
- * @returns {Promise<void>}
+ * @param {string} refreshToken non-empty
+ * @returns {Promise<{ accessToken: string, refreshToken: string, expiresIn: number } | null>}
+ *   null ONLY for a genuinely dead token; infrastructure failures throw.
  */
-const changePassword = async (userId, currentPassword, newPassword) => {
-  const user = await User.findById(userId).select('+password');
-  if (!user) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'User not found', {
-      code: errorCodes.RESOURCE_NOT_FOUND,
-    });
+const refresh = async (refreshToken) => tokenService.rotate(refreshToken);
+
+/**
+ * Best effort: unknown, expired and already-revoked tokens are a no-op.
+ * @param {string} refreshToken non-empty
+ */
+const logout = async (refreshToken) => tokenService.revoke(refreshToken, 'LOGOUT');
+
+/**
+ * POST /auth/forgot-password. Identical outcome for every valid address, registered
+ * or not — same status, same body, same shape of work (BACKEND_SPEC.md §3.6, §6):
+ * the per-address send limit runs for both, and the unknown path runs the same
+ * transaction against a filter that matches nothing and schedules a no-op email.
+ * Email delivery is never awaited.
+ *
+ * @param {{ email: string }} input validated, email normalised
+ * @returns {Promise<{ expiresInSeconds: number, resendAfterSeconds: number, codeLength: number }>}
+ */
+const forgotPassword = async ({ email }) => {
+  const { allowed } = await sendLimitService.consume(email);
+  if (!allowed) {
+    throw ApiError.tooManyAttempts();
   }
-  if (!(await user.isPasswordMatch(currentPassword))) {
-    throw new ApiError(httpStatus.UNAUTHORIZED, 'Current password is incorrect', {
-      code: errorCodes.INVALID_CREDENTIALS,
-      details: [{ field: 'currentPassword', message: 'Current password is incorrect' }],
-    });
+
+  const user = await User.findOne({ email });
+  if (user) {
+    const { code } = await otpService.issue(user);
+    emailService.enqueueOtpEmail({ to: user.email, code });
+  } else {
+    await otpService.simulateIssue();
+    emailService.enqueueNoop();
   }
-  if (currentPassword === newPassword) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'New password must differ from the current one', {
-      code: errorCodes.VALIDATION_ERROR,
-      details: [{ field: 'newPassword', message: 'New password must differ from the current one' }],
-    });
+
+  // A fresh full set on every call, resends included: the client's countdowns start
+  // from these numbers (§5).
+  return {
+    expiresInSeconds: config.otp.ttlSeconds,
+    resendAfterSeconds: config.otp.resendAfterSeconds,
+    codeLength: config.otp.length,
+  };
+};
+
+/**
+ * POST /auth/verify-otp. A verified code buys a reset token and nothing else — never
+ * a session (§3.7, §6). If issuing the token fails after the code was consumed, the
+ * error propagates (503) and the pilgrim asks for a new code.
+ *
+ * @param {{ email: string, code: string }} input validated
+ * @returns {Promise<{ resetToken: string, expiresInSeconds: number }>}
+ */
+const verifyOtp = async ({ email, code }) => {
+  const result = await otpService.verify(email, code);
+  if (result.error === 'locked') {
+    throw ApiError.tooManyAttempts();
   }
-  user.password = newPassword;
-  await user.save();
-  await tokenService.revokeAllUserTokens(user.id);
+  if (result.error === 'expired') {
+    throw ApiError.otpExpired();
+  }
+  if (!result.ok) {
+    throw ApiError.invalidOtp();
+  }
+  const resetToken = await tokenService.issueResetToken(result.userId);
+  return { resetToken, expiresInSeconds: config.tokens.resetTtlSeconds };
 };
 
 /**
- * OTP auth: request 6-digit code (5-min TTL, max 5 attempts)
- * TODO: integrate SMS provider (Twilio, AWS SNS, etc.)
+ * Read-only check that a reset token is usable, before the password is validated.
+ * @param {string} resetToken
+ * @throws {ApiError} 400 invalid_reset_token
  */
-const requestOtp = async (phone, locale, meta = {}) => {
-  // TODO: validate phone format (E.164)
-  // TODO: check rate limit (5 per 15 min per phone)
-  // TODO: check lockout (15 min after 5 failed attempts on phone + IP)
-  // TODO: send OTP code via SMS
-  // TODO: store OTP challenge in Redis/DB with 5-min TTL
-
-  const challengeId = require('uuid').v4();
-  const expiresIn = 300; // 5 minutes
-
-  return { challengeId, expiresIn };
+const assertUsableResetToken = async (resetToken) => {
+  if (!(await tokenService.findUsableResetToken(resetToken))) {
+    throw ApiError.invalidResetToken();
+  }
 };
 
 /**
- * OTP verify: exchange challenge + code for tokens
- * Returns tokens + isNewUser flag for first-time signup
+ * POST /auth/reset-password. The hash is computed before the transaction opens, to
+ * keep it short. Then, atomically: spend the token (a concurrent double-submit loses
+ * here), set the password, spend every other reset token and OTP code for the
+ * account, and revoke every refresh token. Returns nothing: no tokens (§3.8).
+ *
+ * @param {string} resetToken
+ * @param {string} password validated, untrimmed
  */
-const verifyOtp = async (challengeId, code, meta = {}) => {
-  // TODO: retrieve OTP challenge from Redis/DB
-  // TODO: verify code matches (constant-time comparison)
-  // TODO: check attempt count, enforce lockout
-  // TODO: find or create user by phone
-  // TODO: generate rotating refresh token pair
-
-  const user = { id: 'stub-user-id', phone: '+966501234567', firstName: 'Test' };
-  const tokens = await tokenService.generateAuthTokens(user, meta);
-  const isNewUser = false; // TODO: detect actual new users
-
-  return { user, tokens, isNewUser };
-};
-
-/**
- * Refresh: rotated refresh tokens (single-use)
- * Reuse detection revokes whole device family + logs security event
- */
-const refresh = async (refreshToken, meta = {}) => {
-  // TODO: verify refresh token signature
-  // TODO: check reuse (token already consumed) → revoke family + log
-  // TODO: retrieve user, verify active
-  // TODO: issue new token pair
-
-  const user = { id: 'stub-user-id', phone: '+966501234567', firstName: 'Test' };
-  const tokens = await tokenService.generateAuthTokens(user, meta);
-
-  return { tokens };
-};
-
-/**
- * Register device: store push token + platform for notifications
- */
-const registerDevice = async (userId, { pushToken, platform, appVersion, locale }) => {
-  // TODO: validate pushToken format
-  // TODO: store in user.pushTokens[] or separate PushToken table
-  // TODO: tag device by platform + version for targeted notifications
-
-  return { success: true };
-};
-
-/**
- * Get auth context: user + journey + entitlement
- */
-const getMe = async (userId) => {
-  // TODO: fetch user by id
-  // TODO: fetch journey (type, season_id, departure_date, daysUntilDeparture)
-  // TODO: fetch current entitlement (active pass, expires_at, source, features[])
-
-  const user = { id: userId, phone: '+966501234567', firstName: 'Test' };
-  const journey = { type: 'HAJJ', seasonId: null, daysUntilDeparture: null };
-  const entitlement = { active: false, seasonCode: null, expiresAt: null, source: null };
-
-  return { user, journey, entitlement };
+const resetPassword = async (resetToken, password) => {
+  const passwordHash = await passwordService.hash(password);
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const tokenDoc = await tokenService.consumeResetToken(resetToken, { session });
+      if (!tokenDoc) {
+        throw ApiError.invalidResetToken();
+      }
+      const userId = tokenDoc.user;
+      const updated = await User.updateOne({ _id: userId }, { $set: { passwordHash } }, { session });
+      if (updated.matchedCount === 0) {
+        throw ApiError.invalidResetToken();
+      }
+      await tokenService.invalidateResetTokensForUser(userId, { session });
+      await otpService.supersedeAllForUser(userId, { session });
+      await tokenService.revokeAllForUser(userId, 'PASSWORD_RESET', { session });
+    });
+  } finally {
+    await session.endSession();
+  }
 };
 
 module.exports = {
   register,
-  loginUserWithEmailAndPassword,
-  logout,
-  logoutAll,
-  refreshAuth,
-  forgotPassword,
-  resetPassword,
-  verifyEmail,
-  changePassword,
-  requestOtp,
-  verifyOtp,
-  refresh,
-  registerDevice,
+  login,
   getMe,
+  refresh,
+  logout,
+  forgotPassword,
+  verifyOtp,
+  assertUsableResetToken,
+  resetPassword,
 };

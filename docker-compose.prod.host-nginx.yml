@@ -1,0 +1,16 @@
+# Override for a server that already runs nginx on 80/443 (the staging VPS). Never use it alone,
+# and never type the -f flags by hand: deploy/dc.sh always passes both files.
+#
+#   ./deploy/dc.sh up -d --build
+#
+# The host's nginx (deploy/nginx/api-staging.healthhub4u.co.uk.conf) terminates TLS with a
+# certbot certificate and proxies to the api on 127.0.0.1:${API_HOST_PORT:-5100}.
+#
+# LOOPBACK ONLY. Docker's published ports bypass UFW: "5100:5000" or "0.0.0.0:5100:5000" would
+# put the API on the internet without TLS, around nginx. The API must be reachable only through
+# nginx. Nothing else (mongo, caddy) is published by this file.
+
+services:
+  api:
+    ports:
+      - '127.0.0.1:${API_HOST_PORT:-5100}:5000'
