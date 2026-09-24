@@ -227,7 +227,14 @@ const fieldCode = (field) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Newest <unix-ms>.json in EMAIL_DEV_DIR addressed to `to`, waiting up to 5s. Never for a non-local host. */
+/**
+ * Dev email file names: <unix-ms>-<4 hex>.json (the suffix keeps two emails written in
+ * the same millisecond apart). The older <unix-ms>.json form is still accepted.
+ */
+// eslint-disable-next-line security/detect-unsafe-regex -- one \d+ and a fixed-length optional group: linear
+const DEV_EMAIL_FILE = /^(\d+)(?:-[0-9a-f]{4})?\.json$/;
+
+/** Newest dev email in EMAIL_DEV_DIR addressed to `to`, waiting up to 5s. Never for a non-local host. */
 const readDevEmailCode = async (to) => {
   if (!IS_LOCAL) {
     return null;
@@ -237,11 +244,12 @@ const readDevEmailCode = async (to) => {
   do {
     let files = [];
     try {
-      files = fs.readdirSync(dir).filter((name) => /^\d+\.json$/.test(name));
+      files = fs.readdirSync(dir).filter((name) => DEV_EMAIL_FILE.test(name));
     } catch (error) {
       files = [];
     }
-    files.sort((a, b) => Number(b.slice(0, -5)) - Number(a.slice(0, -5)));
+    const sentAt = (name) => Number(DEV_EMAIL_FILE.exec(name)[1]);
+    files.sort((a, b) => sentAt(b) - sentAt(a));
     for (const name of files) {
       try {
         const mail = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
