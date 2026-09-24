@@ -17,7 +17,6 @@ module.exports = {
     // Process entry points and one-shot CLI scripts: exercised by running them,
     // not by unit tests, so they would only dilute the numbers below.
     'src/index.js',
-    'src/gateway/index.js',
     'src/scripts/',
   ],
   collectCoverageFrom: ['src/**/*.js'],

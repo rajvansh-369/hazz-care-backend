@@ -9,13 +9,6 @@ const { password } = require('./custom.validation');
 
 const email = Joi.string().trim().lowercase().email().max(254);
 
-const phone = Joi.string()
-  .pattern(/^\+\d{1,3}\d{4,14}$/)
-  .messages({ 'string.pattern.base': 'Phone must be in E.164 format (e.g., +966501234567)' });
-
-const locale = Joi.string()
-  .valid('en', 'ar', 'ur', 'id', 'fr', 'bn', 'tr');
-
 // ============================================================================
 // EMAIL/PASSWORD AUTH (Keep existing flow)
 // ============================================================================
@@ -69,43 +62,7 @@ const changePassword = {
   }),
 };
 
-// ============================================================================
-// OTP AUTH (Phone-first, per CLAUDE.md §4)
-// ============================================================================
-
-const requestOtp = {
-  body: Joi.object().keys({
-    phone: phone.required(),
-    locale: locale.required(),
-  }),
-};
-
-const verifyOtp = {
-  body: Joi.object().keys({
-    challengeId: Joi.string().uuid().required(),
-    code: Joi.string().length(6).pattern(/^\d+$/).required().messages({
-      'string.pattern.base': 'Code must be 6 digits',
-    }),
-  }),
-};
-
-const refresh = {
-  body: Joi.object().keys({
-    refreshToken: Joi.string().required(),
-  }),
-};
-
-const registerDevice = {
-  body: Joi.object().keys({
-    pushToken: Joi.string().max(512).required(),
-    platform: Joi.string().valid('ios', 'android', 'web').required(),
-    appVersion: Joi.string().max(20).required(),
-    locale: locale.required(),
-  }),
-};
-
 module.exports = {
-  // Email/password
   register,
   login,
   refreshTokens,
@@ -114,9 +71,4 @@ module.exports = {
   resetPassword,
   verifyEmail,
   changePassword,
-  // OTP
-  requestOtp,
-  verifyOtp,
-  refresh,
-  registerDevice,
 };

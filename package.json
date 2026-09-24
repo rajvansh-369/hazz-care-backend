@@ -1,7 +1,7 @@
 {
-  "name": "node-mongo-api-boilerplate",
+  "name": "hajjcare-api",
   "version": "1.0.0",
-  "description": "Production-ready Node.js + Express + MongoDB REST API boilerplate with an API gateway, JWT auth, MVC structure, layered validation and error handling.",
+  "description": "HajjCare backend API: Node.js + Express + MongoDB (Mongoose) with JWT auth, serving the HajjCare Flutter app.",
   "private": true,
   "main": "src/index.js",
   "engines": {
@@ -10,9 +10,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "start:gateway": "node src/gateway/index.js",
-    "start:all": "concurrently -n api,gateway -c cyan,magenta \"npm run start\" \"npm run start:gateway\"",
-    "dev": "concurrently -n api,gateway -c cyan,magenta \"nodemon src/index.js\" \"nodemon src/gateway/index.js\"",
+    "dev": "nodemon src/index.js",
     "test": "cross-env NODE_ENV=test jest --runInBand",
     "test:watch": "cross-env NODE_ENV=test jest --runInBand --watch",
     "test:coverage": "cross-env NODE_ENV=test jest --runInBand --coverage",
@@ -27,15 +25,12 @@
     "mongodb",
     "mongoose",
     "jwt",
-    "boilerplate",
-    "api-gateway",
     "mvc"
   ],
   "license": "MIT",
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
-    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
@@ -43,17 +38,13 @@
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
     "hpp": "^0.2.3",
-    "http-proxy-middleware": "^3.0.3",
     "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.8.0",
     "morgan": "^1.10.0",
-    "swagger-ui-express": "^5.0.1",
-    "uuid": "^11.0.3",
     "winston": "^3.17.0"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.0",

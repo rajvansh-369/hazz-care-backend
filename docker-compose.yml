@@ -42,41 +42,8 @@ services:
     depends_on:
       mongo-init:
         condition: service_completed_successfully
-    expose:
-      - '5000'
-
-  gateway:
-    build: .
-    restart: unless-stopped
-    command: ['node', 'src/gateway/index.js']
-    environment:
-      NODE_ENV: production
-      PORT: 5000
-      GATEWAY_PORT: 8080
-      SERVICE_NAME: api-gateway
-      MONGODB_URL: mongodb://mongo:27017/node-mongo-boilerplate
-      MONGODB_REPLICA_SET: rs0
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env before composing}
-      CORE_SERVICE_URL: http://api:5000
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      TRUST_PROXY: 1
-      LOG_LEVEL: info
-    depends_on:
-      - api
     ports:
-      - '8080:8080'
-    healthcheck:
-      test:
-        [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://127.0.0.1:8080/gateway/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 30s
-      timeout: 4s
-      retries: 3
-      start_period: 15s
+      - '5000:5000'
 
 volumes:
   mongo-data:

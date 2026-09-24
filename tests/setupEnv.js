@@ -8,7 +8,6 @@
 const defaults = {
   NODE_ENV: 'test',
   PORT: '5099',
-  GATEWAY_PORT: '8099',
   API_PREFIX: '/api/v1',
   SERVICE_NAME: 'core-service-test',
   LOG_LEVEL: 'error',
@@ -26,8 +25,6 @@ const defaults = {
   MONGODB_AUTO_INDEX: 'false',
   CORS_ORIGINS: '*',
   TRUST_PROXY: '1',
-  CORE_SERVICE_URL: 'http://127.0.0.1:5099',
-  GATEWAY_PROXY_TIMEOUT_MS: '3000',
 };
 
 Object.entries(defaults).forEach(([key, value]) => {

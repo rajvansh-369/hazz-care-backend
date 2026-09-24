@@ -5,7 +5,6 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const compression = require('compression');
-const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
 const hpp = require('hpp');
 
@@ -17,7 +16,7 @@ const { errorConverter, errorHandler, notFoundHandler } = require('./middlewares
 
 const app = express();
 
-// Honour X-Forwarded-* from exactly `trustProxy` hops (the gateway, by default).
+// Honour X-Forwarded-* from exactly `trustProxy` hops (the reverse proxy, by default).
 // A fixed number rather than `true` keeps client IPs unspoofable.
 app.set('trust proxy', config.trustProxy);
 app.set('etag', 'strong');
@@ -56,8 +55,8 @@ app.use(
   })
 );
 
-// 4. CORS. `origin: true` reflects the caller's origin, which (unlike `*`) is
-// compatible with credentialed requests from the Flutter web build.
+// 4. CORS. `origin: true` reflects the caller's origin. Credentials are off: the
+// client sends a bearer header and no cookies.
 const corsOptions = {
   origin:
     config.corsOrigins === '*'
@@ -68,7 +67,7 @@ const corsOptions = {
           }
           return callback(new Error('Origin not allowed by CORS policy'));
         },
-  credentials: true,
+  credentials: false,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
   exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy'],
@@ -80,7 +79,6 @@ app.options('*', cors(corsOptions));
 // 5. Body parsing with a hard size ceiling.
 app.use(express.json({ limit: config.bodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: config.bodyLimit }));
-app.use(cookieParser());
 
 // 6. Payload hygiene: strip Mongo operators, collapse duplicated query keys.
 app.use(mongoSanitize({ replaceWith: '_' }));
@@ -96,7 +94,7 @@ app.use('/health', require('./routes/v1/health.route'));
 // 8. Versioned API routes.
 app.use(config.apiPrefix, routes);
 
-// Optional static assets (the test console is normally served by the gateway).
+// Optional static assets.
 app.use('/public', express.static(path.join(__dirname, '../public'), { maxAge: '1h' }));
 
 // 9. Unmatched routes and the terminal error pipeline.

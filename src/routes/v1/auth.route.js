@@ -14,7 +14,7 @@ router.post('/login', validate(authValidation.login), authController.login);
 router.post('/refresh', validate(authValidation.refreshTokens), authController.refreshTokens);
 router.post('/logout', authController.logout);
 router.post('/forgot-password', validate(authValidation.forgotPassword), authController.forgotPassword);
-router.post('/verify-otp', validate(authValidation.verifyOtp), authController.verifyOtp);
+router.post('/verify-otp', authController.verifyOtp);
 router.post('/reset-password', validate(authValidation.resetPassword), authController.resetPassword);
 router.get('/me', bearerAuth, authController.me);
 

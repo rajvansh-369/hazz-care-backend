@@ -535,7 +535,6 @@ Runtime      Node.js 20 LTS
 Language     JavaScript (CommonJS, as the existing boilerplate uses)
 Framework    Express 4 (thin) — logic in services, not routes
 DB           MongoDB + Mongoose 8, running as a single-node replica set
-Cache/Queue  Redis 7 + BullMQ
 Validation   Joi (already wired via the validate middleware)
 Logging      winston (with a redaction format) + morgan (request line only, never bodies)
 Testing      Jest + Supertest + mongodb-memory-server; suites that need transactions use
@@ -547,9 +546,11 @@ specification. The decision was deliberate — the boilerplate is production-gra
 Mongoose, and nothing in Layer A's contract depends on the language or ORM choice (see BACKEND_SPEC.md §2).
 Never introduce TypeScript, Prisma, PostgreSQL, Zod, Pino or Vitest.
 
-Redis/BullMQ is justified in Layer A for exactly two things: enqueuing the reset email so
-`forgot-password` never awaits SMTP, and processing RevenueCat events off the HTTP path.
-Socket.IO is not justified yet (B2).
+**Decision made 2026-09-24 — no Redis, no BullMQ.** The OTP email is sent in-process, never
+awaited on the request path, with a few retries and backoff. If the server restarts before an
+email is sent, the pilgrim recovers with the Resend button, which the client already provides
+(BACKEND_SPEC.md §3.6, §5). RevenueCat events are likewise processed in-process after the raw
+event is durably stored (§A5). Socket.IO is not justified yet (B2).
 
 ## C2. Layering
 
@@ -557,7 +558,7 @@ Socket.IO is not justified yet (B2).
 routes/        HTTP only: parse, validate, call service, shape response. No DB, no rules.
 services/      All business logic. Takes a ctx. Throws ApiError.
 models/        Mongoose schemas and indexes (src/models/), accessed from services. No business rules.
-jobs/          BullMQ processors. Thin wrappers over services.
+jobs/          In-process background work (email sending with retry). Thin wrappers over services.
 lib/           Crypto, tokens, mail.
 ```
 
