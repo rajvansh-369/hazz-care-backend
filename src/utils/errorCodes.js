@@ -1,27 +1,18 @@
 'use strict';
 
-/**
- * Stable, machine readable error codes. Clients (including the Flutter app)
- * should branch on these instead of on human readable messages.
- */
 module.exports = {
-  VALIDATION_ERROR: 'VALIDATION_ERROR',
-  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
-  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
-  ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
-  EMAIL_ALREADY_EXISTS: 'EMAIL_ALREADY_EXISTS',
-  DUPLICATE_RESOURCE: 'DUPLICATE_RESOURCE',
-  UNAUTHENTICATED: 'UNAUTHENTICATED',
-  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
-  TOKEN_INVALID: 'TOKEN_INVALID',
-  FORBIDDEN: 'FORBIDDEN',
-  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
-  ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
-  RATE_LIMITED: 'RATE_LIMITED',
-  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
-  UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
-  DATABASE_ERROR: 'DATABASE_ERROR',
-  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
-  GATEWAY_TIMEOUT: 'GATEWAY_TIMEOUT',
-  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  email_taken: 'email_taken',
+  invalid_credentials: 'invalid_credentials',
+  account_not_found: 'account_not_found',
+  invalid_reset_token: 'invalid_reset_token',
+  too_many_attempts: 'too_many_attempts',
+  otp_expired: 'otp_expired',
+  invalid_otp: 'invalid_otp',
+  invalid_input: 'invalid_input',
+  password_too_short: 'password_too_short',
+  email_invalid: 'email_invalid',
+  session_revoked: 'session_revoked',
+  server_error: 'server_error',
+  bad_request: 'bad_request',
+  not_found: 'not_found',
 };

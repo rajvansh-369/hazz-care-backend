@@ -22,9 +22,9 @@ const locale = Joi.string()
 
 const register = {
   body: Joi.object().keys({
-    name: Joi.string().trim().min(2).max(80).required(),
     email: email.required(),
     password: Joi.string().max(128).custom(password).required(),
+    fullName: Joi.string().trim().max(80),
   }),
 };
 

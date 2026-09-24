@@ -54,12 +54,12 @@ const verifyJwt = (token, expectedType) => {
     });
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
-      throw new ApiError(401, 'Token has expired', { code: errorCodes.TOKEN_EXPIRED });
+      throw new ApiError(401, 'Token has expired', { code: errorCodes.invalid_credentials });
     }
-    throw new ApiError(401, 'Token is invalid', { code: errorCodes.TOKEN_INVALID });
+    throw new ApiError(401, 'Token is invalid', { code: errorCodes.invalid_credentials });
   }
   if (payload.type !== expectedType) {
-    throw new ApiError(401, 'Token is invalid', { code: errorCodes.TOKEN_INVALID });
+    throw new ApiError(401, 'Token is invalid', { code: errorCodes.invalid_credentials });
   }
   return payload;
 };
@@ -100,12 +100,12 @@ const verifyStoredToken = async (token, type) => {
   });
   if (!tokenDoc) {
     throw new ApiError(401, 'Token is invalid or has already been used', {
-      code: errorCodes.TOKEN_INVALID,
+      code: errorCodes.invalid_credentials,
     });
   }
   if (tokenDoc.expires.getTime() <= Date.now()) {
     await Token.deleteOne({ _id: tokenDoc._id });
-    throw new ApiError(401, 'Token has expired', { code: errorCodes.TOKEN_EXPIRED });
+    throw new ApiError(401, 'Token has expired', { code: errorCodes.invalid_credentials });
   }
   return tokenDoc;
 };

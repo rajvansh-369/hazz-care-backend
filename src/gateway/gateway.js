@@ -19,7 +19,6 @@ const {
   notFoundHandler,
 } = require('../middlewares/error.middleware');
 const ApiError = require('../utils/ApiError');
-const ApiResponse = require('../utils/ApiResponse');
 const httpStatus = require('../utils/httpStatus');
 const errorCodes = require('../utils/errorCodes');
 const { REQUEST_ID_HEADER } = require('../config/constants');
@@ -75,17 +74,14 @@ app.use(
 app.use(compression());
 
 /** Gateway liveness: answers even when every upstream is down. */
-app.get('/gateway/health', (req, res) =>
-  ApiResponse.send(res, {
-    message: 'Gateway is live',
-    data: {
-      status: 'up',
-      service: 'api-gateway',
-      env: config.env,
-      timestamp: new Date().toISOString(),
-    },
-  })
-);
+app.get('/gateway/health', (req, res) => {
+  res.status(httpStatus.OK).json({
+    status: 'up',
+    service: 'api-gateway',
+    env: config.env,
+    timestamp: new Date().toISOString(),
+  });
+});
 
 /** Aggregated readiness: one call tells you the state of the whole mesh. */
 app.get('/gateway/health/services', async (req, res, next) => {
@@ -120,30 +116,24 @@ app.get('/gateway/health/services', async (req, res, next) => {
     );
 
     const allUp = report.every((service) => service.status === 'up');
-    return ApiResponse.send(res, {
-      statusCode: allUp ? httpStatus.OK : httpStatus.SERVICE_UNAVAILABLE,
-      message: allUp ? 'All services are reachable' : 'One or more services are unavailable',
-      data: { services: report },
-    });
+    const statusCode = allUp ? httpStatus.OK : httpStatus.SERVICE_UNAVAILABLE;
+    res.status(statusCode).json({ services: report });
   } catch (error) {
     return next(error);
   }
 });
 
 /** Route table, handy when onboarding a new client. */
-app.get('/gateway/routes', (req, res) =>
-  ApiResponse.send(res, {
-    message: 'Registered upstreams',
-    data: {
-      routes: services.map(({ name, prefix, target, breaker }) => ({
-        name,
-        prefix,
-        target,
-        circuit: breaker.snapshot(),
-      })),
-    },
-  })
-);
+app.get('/gateway/routes', (req, res) => {
+  res.status(httpStatus.OK).json({
+    routes: services.map(({ name, prefix, target, breaker }) => ({
+      name,
+      prefix,
+      target,
+      circuit: breaker.snapshot(),
+    })),
+  });
+});
 
 // Rate limiting is enforced at the edge, before anything is forwarded.
 app.use(config.apiPrefix, generalLimiter);

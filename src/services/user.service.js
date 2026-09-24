@@ -69,7 +69,7 @@ const getUserByIdOrFail = async (userId) => {
   const user = await getUserById(userId);
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found', {
-      code: errorCodes.RESOURCE_NOT_FOUND,
+      code: errorCodes.account_not_found,
     });
   }
   return user;

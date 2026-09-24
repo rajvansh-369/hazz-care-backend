@@ -64,10 +64,15 @@ const validate = (schema) => (req, res, next) => {
   });
 
   if (details.length) {
+    const errors = details.map((d) => ({
+      field: d.field,
+      code: errorCodes.invalid_input,
+      message: d.message,
+    }));
     return next(
-      new ApiError(httpStatus.BAD_REQUEST, 'Request validation failed', {
-        code: errorCodes.VALIDATION_ERROR,
-        details,
+      new ApiError(httpStatus.BAD_REQUEST, 'Invalid input', {
+        code: errorCodes.invalid_input,
+        details: errors,
       })
     );
   }

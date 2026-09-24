@@ -13,7 +13,6 @@ const config = require('./config/config');
 const morgan = require('./config/morgan');
 const routes = require('./routes/v1');
 const requestId = require('./middlewares/requestId.middleware');
-const { generalLimiter } = require('./middlewares/rateLimiter.middleware');
 const { errorConverter, errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
 
 const app = express();
@@ -94,8 +93,8 @@ app.use(compression());
 // the API prefix.
 app.use('/health', require('./routes/v1/health.route'));
 
-// 8. Versioned API behind the shared rate limiter.
-app.use(config.apiPrefix, generalLimiter, routes);
+// 8. Versioned API routes.
+app.use(config.apiPrefix, routes);
 
 // Optional static assets (the test console is normally served by the gateway).
 app.use('/public', express.static(path.join(__dirname, '../public'), { maxAge: '1h' }));

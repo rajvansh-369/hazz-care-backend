@@ -21,7 +21,7 @@ class ApiError extends Error {
   constructor(statusCode, message, options = {}) {
     super(message);
     const {
-      code = errorCodes.INTERNAL_ERROR,
+      code = errorCodes.invalid_input,
       details = [],
       isOperational = true,
       stack = '',
@@ -40,41 +40,44 @@ class ApiError extends Error {
     }
   }
 
-  static badRequest(message = 'Bad request', options = {}) {
+  static badRequest(message = 'Invalid input', options = {}) {
     return new ApiError(httpStatus.BAD_REQUEST, message, {
-      code: errorCodes.VALIDATION_ERROR,
+      code: errorCodes.invalid_input,
       ...options,
     });
   }
 
-  static unauthorized(message = 'Authentication required', options = {}) {
+  static unauthorized(message = 'Invalid credentials', options = {}) {
     return new ApiError(httpStatus.UNAUTHORIZED, message, {
-      code: errorCodes.UNAUTHENTICATED,
+      code: errorCodes.invalid_credentials,
       ...options,
     });
   }
 
-  static forbidden(message = 'You do not have permission to perform this action', options = {}) {
-    return new ApiError(httpStatus.FORBIDDEN, message, { code: errorCodes.FORBIDDEN, ...options });
+  static forbidden(message = 'Invalid credentials', options = {}) {
+    return new ApiError(httpStatus.FORBIDDEN, message, {
+      code: errorCodes.invalid_credentials,
+      ...options,
+    });
   }
 
-  static notFound(message = 'Resource not found', options = {}) {
+  static notFound(message = 'Not found', options = {}) {
     return new ApiError(httpStatus.NOT_FOUND, message, {
-      code: errorCodes.RESOURCE_NOT_FOUND,
+      code: errorCodes.invalid_input,
       ...options,
     });
   }
 
-  static conflict(message = 'Resource already exists', options = {}) {
+  static conflict(message = 'Email already registered', options = {}) {
     return new ApiError(httpStatus.CONFLICT, message, {
-      code: errorCodes.DUPLICATE_RESOURCE,
+      code: errorCodes.email_taken,
       ...options,
     });
   }
 
   static internal(message = 'Something went wrong', options = {}) {
     return new ApiError(httpStatus.INTERNAL_SERVER_ERROR, message, {
-      code: errorCodes.INTERNAL_ERROR,
+      code: errorCodes.invalid_input,
       isOperational: false,
       ...options,
     });

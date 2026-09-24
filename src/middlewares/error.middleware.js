@@ -7,11 +7,17 @@ const ApiError = require('../utils/ApiError');
 const httpStatus = require('../utils/httpStatus');
 const errorCodes = require('../utils/errorCodes');
 
-/** Terminal 404 for any request that matched no route. */
 const notFoundHandler = (req, res, next) => {
+  if (req.path.startsWith('/auth')) {
+    return next(
+      new ApiError(httpStatus.BAD_REQUEST, 'Invalid request', {
+        code: errorCodes.bad_request,
+      })
+    );
+  }
   next(
-    new ApiError(httpStatus.NOT_FOUND, `Route ${req.method} ${req.originalUrl} does not exist`, {
-      code: errorCodes.ROUTE_NOT_FOUND,
+    new ApiError(httpStatus.NOT_FOUND, 'Not found', {
+      code: errorCodes.not_found,
     })
   );
 };
@@ -19,21 +25,30 @@ const notFoundHandler = (req, res, next) => {
 const fromMongooseValidationError = (error) => {
   const details = Object.values(error.errors || {}).map((fieldError) => ({
     field: fieldError.path,
-    location: 'body',
+    code: errorCodes.invalid_input,
     message: fieldError.message,
   }));
-  return new ApiError(httpStatus.BAD_REQUEST, 'Request validation failed', {
-    code: errorCodes.VALIDATION_ERROR,
+  return new ApiError(httpStatus.UNPROCESSABLE_ENTITY, 'Invalid input', {
+    code: errorCodes.invalid_input,
     details,
     stack: error.stack,
   });
 };
 
-const fromDuplicateKeyError = (error) => {
+const fromDuplicateKeyError = (error, req) => {
   const field = Object.keys(error.keyPattern || error.keyValue || { field: 1 })[0];
-  return new ApiError(httpStatus.CONFLICT, `A record with this ${field} already exists`, {
-    code: field === 'email' ? errorCodes.EMAIL_ALREADY_EXISTS : errorCodes.DUPLICATE_RESOURCE,
-    details: [{ field, location: 'body', message: `This ${field} is already in use` }],
+  // ONLY User.email on register → 409 email_taken
+  if (field === 'email' && req.path === '/register') {
+    return new ApiError(httpStatus.CONFLICT, 'Email already registered', {
+      code: errorCodes.email_taken,
+      details: [{ field: 'email', code: errorCodes.email_taken, message: 'Email already registered' }],
+      stack: error.stack,
+    });
+  }
+  // ANY other E11000 (Token.tokenHash, RevenueCatEvent._id, etc.) → 500 server_error, never 409
+  return new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Database error', {
+    code: errorCodes.server_error,
+    isOperational: false,
     stack: error.stack,
   });
 };
@@ -51,42 +66,39 @@ const errorConverter = (err, req, res, next) => {
     if (error instanceof mongoose.Error.ValidationError) {
       error = fromMongooseValidationError(error);
     } else if (error instanceof mongoose.Error.CastError) {
-      error = new ApiError(httpStatus.BAD_REQUEST, `Invalid value for '${error.path}'`, {
-        code: errorCodes.VALIDATION_ERROR,
-        details: [{ field: error.path, location: 'params', message: 'Malformed identifier' }],
+      // CastError (malformed ObjectId) → 400, never 404
+      error = new ApiError(httpStatus.BAD_REQUEST, 'Invalid input', {
+        code: errorCodes.invalid_input,
+        details: [{ field: error.path, code: errorCodes.invalid_input, message: 'Invalid input' }],
         stack: error.stack,
       });
     } else if (error && (error.code === 11000 || error.code === 11001)) {
-      error = fromDuplicateKeyError(error);
+      error = fromDuplicateKeyError(error, req);
     } else if (error instanceof mongoose.Error) {
       error = new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Database operation failed', {
-        code: errorCodes.DATABASE_ERROR,
+        code: errorCodes.invalid_input,
         isOperational: false,
         stack: error.stack,
       });
     } else if (error && error.type === 'entity.parse.failed') {
       error = new ApiError(httpStatus.BAD_REQUEST, 'Request body is not valid JSON', {
-        code: errorCodes.VALIDATION_ERROR,
+        code: errorCodes.invalid_input,
         stack: error.stack,
       });
     } else if (error && error.type === 'entity.too.large') {
       error = new ApiError(httpStatus.PAYLOAD_TOO_LARGE, 'Request body is too large', {
-        code: errorCodes.PAYLOAD_TOO_LARGE,
+        code: errorCodes.payload_too_large,
         stack: error.stack,
       });
     } else if (error && error.type === 'charset.unsupported') {
       error = new ApiError(httpStatus.UNSUPPORTED_MEDIA_TYPE, 'Unsupported charset', {
-        code: errorCodes.UNSUPPORTED_MEDIA_TYPE,
+        code: errorCodes.unsupported_media_type,
         stack: error.stack,
       });
     } else {
-      const statusCode =
-        error && typeof error.statusCode === 'number'
-          ? error.statusCode
-          : httpStatus.INTERNAL_SERVER_ERROR;
-      const message = (error && error.message) || httpStatus.getStatusMessage(statusCode);
-      error = new ApiError(statusCode, message, {
-        code: errorCodes.INTERNAL_ERROR,
+      // Unrecognized error: log it, return 500 server_error
+      error = new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Internal server error', {
+        code: errorCodes.server_error,
         isOperational: false,
         stack: error && error.stack,
       });
@@ -99,11 +111,12 @@ const errorConverter = (err, req, res, next) => {
 /**
  * Single place where an error becomes an HTTP response. Non-operational errors
  * are scrubbed in production so internals are never leaked to a client.
+ * Response format per BACKEND_SPEC.md: {code, errors: [{field, code, message}]}
  */
 // eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, next) => {
   let { statusCode, message } = err;
-  const { code, details, isOperational } = err;
+  let { code, details = [], isOperational } = err;
 
   if (config.isProduction && !isOperational) {
     statusCode = httpStatus.INTERNAL_SERVER_ERROR;
@@ -112,13 +125,21 @@ const errorHandler = (err, req, res, next) => {
 
   res.locals.errorMessage = err.message;
 
+  // CLAUDE.md §A3 rules 1-2: Never 404 or 409 under /auth except email_taken on register.
+  // Transform computed errors to prevent client misinterpretation.
+  if (req.path.startsWith('/auth')) {
+    if (statusCode === httpStatus.NOT_FOUND) {
+      statusCode = httpStatus.BAD_REQUEST;
+      code = errorCodes.bad_request;
+    } else if (statusCode === httpStatus.CONFLICT && code !== errorCodes.email_taken) {
+      statusCode = httpStatus.BAD_REQUEST;
+      code = errorCodes.bad_request;
+    }
+  }
+
   const response = {
-    success: false,
-    code: code || errorCodes.INTERNAL_ERROR,
-    message,
-    ...(details && details.length ? { details } : {}),
-    requestId: req.id,
-    ...(config.isProduction ? {} : { stack: err.stack }),
+    code: code || errorCodes.invalid_input,
+    ...(details && details.length ? { errors: details } : {}),
   };
 
   const logPayload = {

@@ -11,7 +11,7 @@ const errorCodes = require('../utils/errorCodes');
 
 const INVALID_CREDENTIALS = () =>
   new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect email or password', {
-    code: errorCodes.INVALID_CREDENTIALS,
+    code: errorCodes.invalid_credentials,
   });
 
 /**
@@ -31,7 +31,7 @@ const loginUserWithEmailAndPassword = async (email, password) => {
 
   if (!user.isActive) {
     throw new ApiError(httpStatus.FORBIDDEN, 'This account has been deactivated', {
-      code: errorCodes.ACCOUNT_DISABLED,
+      code: errorCodes.invalid_credentials,
     });
   }
 
@@ -39,7 +39,7 @@ const loginUserWithEmailAndPassword = async (email, password) => {
     throw new ApiError(
       httpStatus.FORBIDDEN,
       `Account locked after too many failed attempts. Try again in ${config.security.loginLockMinutes} minutes`,
-      { code: errorCodes.ACCOUNT_LOCKED }
+      { code: errorCodes.invalid_credentials }
     );
   }
 
@@ -72,7 +72,7 @@ const logout = async (refreshToken) => {
   });
   if (!tokenDoc) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Session not found or already ended', {
-      code: errorCodes.TOKEN_INVALID,
+      code: errorCodes.invalid_credentials,
     });
   }
   await Token.deleteOne({ _id: tokenDoc._id });
@@ -98,7 +98,7 @@ const refreshAuth = async (refreshToken, meta = {}) => {
   if (!user || !user.isActive) {
     await Token.deleteOne({ _id: refreshTokenDoc._id });
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Session is no longer valid', {
-      code: errorCodes.TOKEN_INVALID,
+      code: errorCodes.invalid_credentials,
     });
   }
   await Token.deleteOne({ _id: refreshTokenDoc._id });
@@ -164,18 +164,18 @@ const changePassword = async (userId, currentPassword, newPassword) => {
   const user = await User.findById(userId).select('+password');
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found', {
-      code: errorCodes.RESOURCE_NOT_FOUND,
+      code: errorCodes.account_not_found,
     });
   }
   if (!(await user.isPasswordMatch(currentPassword))) {
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Current password is incorrect', {
-      code: errorCodes.INVALID_CREDENTIALS,
+      code: errorCodes.invalid_credentials,
       details: [{ field: 'currentPassword', message: 'Current password is incorrect' }],
     });
   }
   if (currentPassword === newPassword) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'New password must differ from the current one', {
-      code: errorCodes.VALIDATION_ERROR,
+      code: errorCodes.invalid_input,
       details: [{ field: 'newPassword', message: 'New password must differ from the current one' }],
     });
   }

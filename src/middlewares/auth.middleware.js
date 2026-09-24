@@ -43,8 +43,8 @@ const auth = (...args) => {
   return catchAsync(async (req, res, next) => {
     const token = extractBearerToken(req);
     if (!token) {
-      throw new ApiError(httpStatus.UNAUTHORIZED, 'Authentication token is missing', {
-        code: errorCodes.UNAUTHENTICATED,
+      throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid credentials', {
+        code: errorCodes.invalid_credentials,
       });
     }
 
@@ -52,18 +52,8 @@ const auth = (...args) => {
     const user = await User.findById(payload.sub);
 
     if (!user) {
-      throw new ApiError(httpStatus.UNAUTHORIZED, 'Token is invalid', {
-        code: errorCodes.TOKEN_INVALID,
-      });
-    }
-    if (!user.isActive) {
-      throw new ApiError(httpStatus.FORBIDDEN, 'This account has been deactivated', {
-        code: errorCodes.ACCOUNT_DISABLED,
-      });
-    }
-    if (user.isLocked()) {
-      throw new ApiError(httpStatus.FORBIDDEN, 'This account is temporarily locked', {
-        code: errorCodes.ACCOUNT_LOCKED,
+      throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid credentials', {
+        code: errorCodes.invalid_credentials,
       });
     }
 
@@ -84,9 +74,9 @@ const auth = (...args) => {
       if (!hasAllRights && !isSelf) {
         throw new ApiError(
           httpStatus.FORBIDDEN,
-          'You do not have permission to perform this action',
+          'Invalid credentials',
           {
-            code: errorCodes.FORBIDDEN,
+            code: errorCodes.invalid_credentials,
           }
         );
       }
