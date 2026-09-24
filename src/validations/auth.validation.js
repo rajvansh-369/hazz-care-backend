@@ -73,9 +73,32 @@ const login = (body) => {
   return { email: normaliseEmail(email), password };
 };
 
+/**
+ * Does not throw: on POST /auth/refresh the handler decides every status itself,
+ * because a 401/403 there signs the pilgrim out (BACKEND_SPEC.md §3.5).
+ *
+ * @param {unknown} body
+ * @returns {string|null} the refresh token, or null when missing, not a string, or ""
+ */
+const refresh = (body) => {
+  const { refreshToken } = bodyOf(body);
+  return typeof refreshToken === 'string' && refreshToken.length > 0 ? refreshToken : null;
+};
+
+/**
+ * Does not throw: logout always answers 204. `{"refreshToken": ""}` is normal — a
+ * session signed in without "Keep me signed in" has no token to send (§3.9).
+ *
+ * @param {unknown} body
+ * @returns {string|null} a token worth revoking, or null when there is nothing to do
+ */
+const logout = (body) => refresh(body);
+
 module.exports = {
   CLIENT_EMAIL_PATTERN,
   normaliseEmail,
   register,
   login,
+  refresh,
+  logout,
 };

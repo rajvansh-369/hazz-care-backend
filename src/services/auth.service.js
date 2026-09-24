@@ -93,8 +93,23 @@ const getMe = async (userId) => {
   return user;
 };
 
+/**
+ * @param {string} refreshToken non-empty
+ * @returns {Promise<{ accessToken: string, refreshToken: string, expiresIn: number } | null>}
+ *   null ONLY for a genuinely dead token; infrastructure failures throw.
+ */
+const refresh = async (refreshToken) => tokenService.rotate(refreshToken);
+
+/**
+ * Best effort: unknown, expired and already-revoked tokens are a no-op.
+ * @param {string} refreshToken non-empty
+ */
+const logout = async (refreshToken) => tokenService.revoke(refreshToken, 'LOGOUT');
+
 module.exports = {
   register,
   login,
   getMe,
+  refresh,
+  logout,
 };

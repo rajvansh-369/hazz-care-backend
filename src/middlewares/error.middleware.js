@@ -112,6 +112,13 @@ const errorHandler = (err, req, res, next) => {
     return undefined;
   }
 
+  // POST /auth/logout always answers 204 (BACKEND_SPEC.md §3.9) — including when the
+  // body parser rejects the request before the handler runs (malformed or oversized).
+  if (authSubPath(req) === '/logout') {
+    logUnexpected(req, err, 'Error on /auth/logout; answering 204 anyway');
+    return res.status(204).end();
+  }
+
   if (err instanceof ApiError) {
     const violation = contractViolation(req, err);
     if (violation) {

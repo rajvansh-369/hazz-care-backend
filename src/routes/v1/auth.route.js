@@ -3,6 +3,7 @@
 const express = require('express');
 const { authController } = require('../../controllers');
 const requireAuth = require('../../middlewares/auth.middleware');
+const { refreshLimiter } = require('../../middlewares/rateLimiter.middleware');
 const errorCodes = require('../../utils/errorCodes');
 const { sendJson } = require('../../utils/respond');
 
@@ -12,10 +13,11 @@ const router = express.Router();
 // - requireAuth is attached to GET /me ONLY, never with router.use() (CLAUDE.md A3).
 // - No generic Joi validate middleware: each handler maps bad input to the
 //   contract's specific codes (password_too_short, email_invalid, ...).
-// - No rate limiter on /login or /register, ever. Others are added per route.
+// - No rate limiter on /login, /register or /logout, ever. Limiters are attached per
+//   route, never with router.use(), so a new route cannot inherit one (CLAUDE.md A7).
 router.post('/register', authController.register);
 router.post('/login', authController.login);
-router.post('/refresh', authController.refresh);
+router.post('/refresh', refreshLimiter, authController.refresh);
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/reset-password', authController.resetPassword);
