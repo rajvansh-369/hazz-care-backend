@@ -6,6 +6,9 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
+# Production secrets live only on the server; the example is committed.
+.env.production
+!.env.production.example
 .DS_Store
 .idea/
 .vscode/

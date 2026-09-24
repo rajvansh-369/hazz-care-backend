@@ -10,16 +10,38 @@
 #
 # Requires: curl, jq
 #
-# Checks marked [MANUAL] need an OTP you can only read from the email. This run's own address
-# cannot receive mail, so trigger a reset for a test account whose inbox you can read, then export
-# OTP_EMAIL=<that address> OTP_CODE=123456 and re-run (its password becomes "a fresh long password").
+# Test addresses: every run registers fresh accounts, by default @hajjcare.test (no mailbox). Against
+# a server that sends REAL email, export OTP_EMAIL=<a mailbox you can read>: every registered
+# address becomes local+contract-<stamp>-<n>@domain in that mailbox, so nothing is sent to a domain
+# that does not exist. Unknown-address probes (which send nothing) stay on hajjcare.test.
+#
+# Checks marked [MANUAL] need the OTP from the reset email the run itself triggers. With OTP_EMAIL
+# set, the run pauses and asks for the code sent to the address it prints (blank skips).
 
 set -uo pipefail
 BASE="${1:-http://localhost:3000/v1}"
 PASS=0; FAIL=0
 STAMP="$(date +%s)$RANDOM"
-EMAIL="contract+${STAMP}@hajjcare.test"
-EMAIL_UPPER="Contract+${STAMP}@HajjCare.test"
+OTP_EMAIL="${OTP_EMAIL:-}"
+if [ -n "$OTP_EMAIL" ]; then
+  case "$OTP_EMAIL" in
+    ?*@?*) ;;
+    *) echo "OTP_EMAIL is not an email address: $OTP_EMAIL" >&2; exit 2 ;;
+  esac
+fi
+ADDRESS_COUNT=0
+# registered_address LABEL -> sets $ADDRESS: an address this run REGISTERS.
+registered_address() {
+  ADDRESS_COUNT=$((ADDRESS_COUNT+1))
+  if [ -n "$OTP_EMAIL" ]; then
+    ADDRESS="${OTP_EMAIL%@*}+contract-${STAMP}-${ADDRESS_COUNT}@${OTP_EMAIL##*@}"
+  else
+    ADDRESS="$1+${STAMP}@hajjcare.test"
+  fi
+}
+registered_address contract; EMAIL="$ADDRESS"
+# The same account in another case: the server must match addresses case-insensitively.
+EMAIL_UPPER="$(printf '%s' "$EMAIL" | tr '[:lower:]' '[:upper:]')"
 PASSWORD="correct horse battery staple"
 # The truncation probe: two passwords that share their first 72 bytes and differ after.
 # bcrypt silently truncates at 72 bytes, so on a bcrypt server BOTH unlock the account.
@@ -76,16 +98,18 @@ req POST /auth/register "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"full
 [ "$(jqt '.code')" = "email_taken" ] && ok "code = email_taken" || bad "code must be email_taken" "$(jqt '.code')"
 [ "$(jqt '.code | type')" = "string" ] && ok "error code is a string" || bad "RULE: error code must be a string"
 
-req POST /auth/register "{\"email\":\"short+${STAMP}@hajjcare.test\",\"password\":\"1234567\",\"fullName\":\"Short\"}"
+registered_address short
+req POST /auth/register "{\"email\":\"$ADDRESS\",\"password\":\"1234567\",\"fullName\":\"Short\"}"
 [ "$STATUS" = "422" ] && ok "7-char password → 422" || bad "short password must be 422" "$STATUS"
 [ "$(jqt '.errors[]? | select(.field=="password") | .code')" = "password_too_short" ] \
   && ok "field password = password_too_short" || bad "missing the password_too_short field error" "$BODY"
 
-req POST /auth/register "{\"email\":\"eight+${STAMP}@hajjcare.test\",\"password\":\"12345678\",\"fullName\":\"Eight\"}"
+registered_address eight
+req POST /auth/register "{\"email\":\"$ADDRESS\",\"password\":\"12345678\",\"fullName\":\"Eight\"}"
 case "$STATUS" in 200|201) ok "8-char password accepted" ;; *) bad "8 chars is the floor, must be accepted" "$STATUS" ;; esac
 
 head_ "3. Passwords — no truncation, case-insensitive email"
-LONGMAIL="long+${STAMP}@hajjcare.test"
+registered_address long; LONGMAIL="$ADDRESS"
 req POST /auth/register "{\"email\":\"$LONGMAIL\",\"password\":\"$LONG_PASSWORD\",\"fullName\":\"Long\"}"
 case "$STATUS" in 200|201) ok "81-char passphrase accepted" ;; *) bad "long passphrase rejected" "$STATUS" ;; esac
 req POST /auth/login "{\"email\":\"$LONGMAIL\",\"password\":\"$LONG_PASSWORD\"}"
@@ -120,7 +144,8 @@ done
 [ "$L429" = "0" ] && ok "20 failed logins, no 429" || bad "RULE 10: login returned 429 — wording is nonsense on a sign-in form"
 R429=0
 for i in $(seq 1 10); do
-  req POST /auth/register "{\"email\":\"rl${i}+${STAMP}@hajjcare.test\",\"password\":\"$PASSWORD\",\"fullName\":\"RL\"}"
+  registered_address "rl${i}"
+  req POST /auth/register "{\"email\":\"$ADDRESS\",\"password\":\"$PASSWORD\",\"fullName\":\"RL\"}"
   [ "$STATUS" = "429" ] && R429=1 && break
 done
 [ "$R429" = "0" ] && ok "10 registers, no 429" || bad "RULE 10: register returned 429"
@@ -217,9 +242,12 @@ for p in /auth/register /auth/forgot-password /auth/verify-otp /auth/reset-passw
 done
 
 head_ "13. [MANUAL] OTP flow"
-OTP_EMAIL="${OTP_EMAIL:-$EMAIL}"
-if [ -n "${OTP_CODE:-}" ]; then
-  req POST /auth/verify-otp "{\"email\":\"$OTP_EMAIL\",\"code\":\"$OTP_CODE\"}"
+OTP_CODE="${OTP_CODE:-}"
+if [ -z "$OTP_CODE" ] && [ -n "$OTP_EMAIL" ] && [ -t 0 ]; then
+  read -r -p "  Enter the 6-digit code emailed to $EMAIL (blank to skip): " OTP_CODE
+fi
+if [ -n "$OTP_CODE" ]; then
+  req POST /auth/verify-otp "{\"email\":\"$EMAIL\",\"code\":\"$OTP_CODE\"}"
   [ "$STATUS" = "200" ] && ok "correct code → 200" || bad "correct code rejected" "$STATUS $BODY"
   RT="$(jqt '.resetToken')"
   [ "$(jqt '.resetToken | type')" = "string" ] && ok "resetToken returned" || bad "resetToken missing"
@@ -229,10 +257,10 @@ if [ -n "${OTP_CODE:-}" ]; then
   [ "$STATUS" = "204" ] && ok "reset → 204" || bad "reset should be 204" "$STATUS"
   req POST /auth/reset-password "{\"resetToken\":\"$RT\",\"password\":\"another password\"}"
   [ "$STATUS" = "400" ] && ok "reset token is single-use" || bad "reset token reused successfully — single-use is firm" "$STATUS"
-  req POST /auth/login "{\"email\":\"$OTP_EMAIL\",\"password\":\"a fresh long password\"}"
+  req POST /auth/login "{\"email\":\"$EMAIL\",\"password\":\"a fresh long password\"}"
   [ "$STATUS" = "200" ] && ok "new password works" || bad "new password does not authenticate" "$STATUS"
 else
-  printf '  \033[33m•\033[0m skipped — trigger a reset for a test account you can read mail for, then re-run with OTP_EMAIL=<its address> OTP_CODE=<6 digits>\n'
+  printf '  \033[33m•\033[0m skipped — set OTP_EMAIL to a mailbox you can read and re-run; the run will ask for the code\n'
 fi
 
 printf '\n\033[1mPassed: %d   Failed: %d\033[0m\n' "$PASS" "$FAIL"

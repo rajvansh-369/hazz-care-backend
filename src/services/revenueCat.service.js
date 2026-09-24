@@ -21,6 +21,8 @@ const DUPLICATE_KEY = 11000;
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 const UNRESOLVED = 'unresolved';
 const REFUND_REASON = 'CUSTOMER_SUPPORT';
+/** At startup, only events at least this old are treated as stranded by a crash. */
+const STRANDED_MIN_AGE_MS = 60 * 1000;
 /** Reconciliation re-processes older events, which may reconcile others in turn. */
 const MAX_RECONCILE_DEPTH = 3;
 
@@ -389,6 +391,49 @@ const createRevenueCatService = ({ now = () => new Date() } = {}) => {
     pending.add(job);
   };
 
+  /**
+   * Events stranded by a crash: stored and answered 200, then the process died before
+   * processing them, so nothing retries them (RevenueCat already has its 200). Processes
+   * them one at a time, oldest first, in the background. Returns at once, so it never
+   * delays startup or a health check. Events younger than `minAgeMs` are left alone:
+   * they may be in flight in this very process.
+   */
+  const recoverStranded = ({ minAgeMs = STRANDED_MIN_AGE_MS } = {}) => {
+    const job = new Promise((resolve) => {
+      setImmediate(resolve);
+    })
+      .then(async () => {
+        const stranded = await RevenueCatEvent.find({
+          processedAt: null,
+          processingError: null,
+          receivedAt: { $lt: new Date(now().getTime() - minAgeMs) },
+        })
+          .sort({ receivedAt: 1 })
+          .select('_id')
+          .lean();
+        if (!stranded.length) {
+          logger.info('RevenueCat recovery: no stranded events');
+          return;
+        }
+        logger.warn(`RevenueCat recovery: ${stranded.length} stranded event(s) found, processing`);
+        for (const { _id } of stranded) {
+          // eslint-disable-next-line no-await-in-loop
+          await processEvent(_id);
+        }
+        const processed = await RevenueCatEvent.countDocuments({
+          _id: { $in: stranded.map(({ _id }) => _id) },
+          processedAt: { $ne: null },
+        });
+        logger.info(
+          `RevenueCat recovery: ${processed} of ${stranded.length} stranded event(s) processed` +
+            (processed < stranded.length ? '; the rest are unresolved or failed (see processingError)' : '')
+        );
+      })
+      .catch((error) => logger.error(`RevenueCat recovery failed: ${error.message}`))
+      .finally(() => pending.delete(job));
+    pending.add(job);
+  };
+
   /** Resolves when every scheduled job has settled. For tests and graceful shutdown. */
   const idle = async () => {
     while (pending.size) {
@@ -397,7 +442,7 @@ const createRevenueCatService = ({ now = () => new Date() } = {}) => {
     }
   };
 
-  return { store, processEvent, schedule, idle };
+  return { store, processEvent, schedule, recoverStranded, idle };
 };
 
 module.exports = {

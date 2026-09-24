@@ -14,13 +14,22 @@
  *
  * No dependencies: Node's built-in fetch. Runs in PowerShell, cmd or any shell.
  *
- * Section 13 needs the OTP from a reset email. Against a real host, trigger a reset for a test account
- * whose inbox you can read and set OTP_EMAIL=<that address> OTP_CODE=123456 (the run then changes that
- * account's password to "a fresh long password"). Or — only
- * against localhost / 127.0.0.1 — it is read from the dev email directory (EMAIL_DEV_DIR), or,
- * when MAILPIT_URL is set, from Mailpit's HTTP API (the docker-compose stack, real SMTP):
+ * Test addresses. Every run registers fresh accounts. By default they are @hajjcare.test, which
+ * cannot receive mail: fine locally, where no email leaves the machine.
  *
- *   MAILPIT_URL=http://localhost:8025 npm run contract -- http://localhost:5000/api/v1
+ * Against a server that sends REAL email (staging), set OTP_EMAIL to a mailbox you can read. Every
+ * address this run registers is then derived from it by plus-addressing,
+ * `local+contract-<stamp>-<n>@domain`, so the reset email lands in that inbox and nothing is sent to
+ * a domain that does not exist (bounces hurt the sender's reputation). Addresses that are never
+ * registered (the unknown-address probes, which send nothing) stay on hajjcare.test.
+ *
+ * Section 13 needs the OTP from the reset email the run itself triggers:
+ *   - localhost: read from the dev email directory (EMAIL_DEV_DIR), or, with MAILPIT_URL set, from
+ *     Mailpit's HTTP API (the docker-compose stacks, real SMTP):
+ *       MAILPIT_URL=http://localhost:8025 npm run contract -- http://localhost:5000/api/v1
+ *   - a real host, with OTP_EMAIL set: the run pauses and asks for the code emailed to the address
+ *     it prints. Read it from the inbox and type it in (blank skips section 13):
+ *       OTP_EMAIL=you@gmail.com npm run contract -- https://api.example.com/api/v1
  *
  * Keep the sections, checks and messages in step with verify-contract.sh.
  */
@@ -70,8 +79,38 @@ const BASE_HOST = (() => {
 const IS_LOCAL = BASE_HOST === 'localhost' || BASE_HOST === '127.0.0.1';
 
 const STAMP = `${Math.floor(Date.now() / 1000)}${Math.floor(Math.random() * 32768)}`;
-const EMAIL = `contract+${STAMP}@hajjcare.test`;
-const EMAIL_UPPER = `Contract+${STAMP}@HajjCare.test`;
+
+/** A real mailbox for the run's registered accounts (see the header), or empty. */
+const OTP_EMAIL = (process.env.OTP_EMAIL || '').trim();
+const OTP_MAILBOX = (() => {
+  if (!OTP_EMAIL) {
+    return null;
+  }
+  const at = OTP_EMAIL.lastIndexOf('@');
+  if (at < 1 || at === OTP_EMAIL.length - 1 || /\s/.test(OTP_EMAIL)) {
+    console.error(`OTP_EMAIL is not an email address: ${OTP_EMAIL}`);
+    process.exit(2);
+  }
+  return { local: OTP_EMAIL.slice(0, at), domain: OTP_EMAIL.slice(at + 1) };
+})();
+
+let addressCount = 0;
+/**
+ * An address this run REGISTERS. With OTP_EMAIL: local+contract-<stamp>-<n>@domain, delivered to
+ * that mailbox. Without: <label>+<stamp>@hajjcare.test.
+ */
+const registeredAddress = (label) => {
+  addressCount += 1;
+  return OTP_MAILBOX
+    ? `${OTP_MAILBOX.local}+contract-${STAMP}-${addressCount}@${OTP_MAILBOX.domain}`
+    : `${label}+${STAMP}@hajjcare.test`;
+};
+/** An address that is never registered: probes for unknown accounts, which send no email. */
+const unknownAddress = (label) => `${label}+${STAMP}@hajjcare.test`;
+
+const EMAIL = registeredAddress('contract');
+// The same account in another case: the server must match addresses case-insensitively.
+const EMAIL_UPPER = EMAIL.toUpperCase();
 const PASSWORD = 'correct horse battery staple';
 // The truncation probe: two passwords that share their first 72 bytes and differ after.
 // bcrypt silently truncates at 72 bytes, so on a bcrypt server BOTH unlock the account.
@@ -316,6 +355,24 @@ const readMailpitCode = async (to) => {
   return null;
 };
 
+/**
+ * Asks for the code emailed to `address` (a real host, OTP_EMAIL set). Empty when stdin is not a
+ * terminal or nothing is entered.
+ */
+const promptForCode = async (address) => {
+  if (!process.stdin.isTTY) {
+    return '';
+  }
+  // eslint-disable-next-line global-require -- only needed on this path
+  const readline = require('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise((resolve) => {
+    rl.question(`  Enter the 6-digit code emailed to ${address} (blank to skip): `, resolve);
+  });
+  rl.close();
+  return answer.trim();
+};
+
 // ---------------------------------------------------------------------------------------------
 // The checks
 // ---------------------------------------------------------------------------------------------
@@ -356,18 +413,18 @@ const run = async () => {
   if (jtype('code') === 'string') {ok('error code is a string');}
   else {bad('RULE: error code must be a string');}
 
-  await req('POST', '/auth/register', json({ email: `short+${STAMP}@hajjcare.test`, password: '1234567', fullName: 'Short' }));
+  await req('POST', '/auth/register', json({ email: registeredAddress('short'), password: '1234567', fullName: 'Short' }));
   if (STATUS === '422') {ok('7-char password → 422');}
   else {bad('short password must be 422', STATUS);}
   if (fieldCode('password') === 'password_too_short') {ok('field password = password_too_short');}
   else {bad('missing the password_too_short field error', BODY);}
 
-  await req('POST', '/auth/register', json({ email: `eight+${STAMP}@hajjcare.test`, password: '12345678', fullName: 'Eight' }));
+  await req('POST', '/auth/register', json({ email: registeredAddress('eight'), password: '12345678', fullName: 'Eight' }));
   if (STATUS === '200' || STATUS === '201') {ok('8-char password accepted');}
   else {bad('8 chars is the floor, must be accepted', STATUS);}
 
   head('3. Passwords — no truncation, case-insensitive email');
-  const LONGMAIL = `long+${STAMP}@hajjcare.test`;
+  const LONGMAIL = registeredAddress('long');
   await req('POST', '/auth/register', json({ email: LONGMAIL, password: LONG_PASSWORD, fullName: 'Long' }));
   if (STATUS === '200' || STATUS === '201') {ok('81-char passphrase accepted');}
   else {bad('long passphrase rejected', STATUS);}
@@ -399,7 +456,7 @@ const run = async () => {
   else {bad('wrong password must be 401', STATUS);}
   if (raw('code') === 'invalid_credentials') {ok('code = invalid_credentials');}
   else {bad('code must be invalid_credentials', raw('code'));}
-  await req('POST', '/auth/login', json({ email: `nobody+${STAMP}@hajjcare.test`, password: 'whatever long' }));
+  await req('POST', '/auth/login', json({ email: unknownAddress('nobody'), password: 'whatever long' }));
   if (STATUS === '401') {ok('unknown email → 401 (no enumeration)');}
   else {bad('unknown email must be 401, never 404', STATUS);}
 
@@ -416,7 +473,7 @@ const run = async () => {
   else {bad('RULE 10: login returned 429 — wording is nonsense on a sign-in form');}
   let R429 = false;
   for (let i = 1; i <= 10; i += 1) {
-    await req('POST', '/auth/register', json({ email: `rl${i}+${STAMP}@hajjcare.test`, password: PASSWORD, fullName: 'RL' }));
+    await req('POST', '/auth/register', json({ email: registeredAddress(`rl${i}`), password: PASSWORD, fullName: 'RL' }));
     if (STATUS === '429') {
       R429 = true;
       break;
@@ -472,7 +529,7 @@ const run = async () => {
   else {bad('expiresInSeconds must be a number');}
   if (jtype('resendAfterSeconds') === 'number') {ok('resendAfterSeconds is a number');}
   else {bad('resendAfterSeconds must be a number');}
-  await req('POST', '/auth/forgot-password', json({ email: `ghost+${STAMP}@hajjcare.test` }));
+  await req('POST', '/auth/forgot-password', json({ email: unknownAddress('ghost') }));
   if (STATUS === '200') {ok('unknown address → 200');}
   else {bad('unknown address must also be 200, never 404', STATUS);}
   if (BODY === B1) {ok('bodies are byte-identical for known and unknown');}
@@ -488,7 +545,7 @@ const run = async () => {
   }
   if (STATUS !== '404') {ok('not 404');}
   else {bad('RULE 7: verify-otp must never 404');}
-  await req('POST', '/auth/verify-otp', json({ email: `ghost+${STAMP}@hajjcare.test`, code: '000000' }));
+  await req('POST', '/auth/verify-otp', json({ email: unknownAddress('ghost'), code: '000000' }));
   if (raw('code') === 'invalid_otp') {ok('unknown address → invalid_otp, same as a wrong code');}
   else {bad('unknown address must answer invalid_otp, never account_not_found or 404', `${STATUS} ${BODY}`);}
 
@@ -533,28 +590,27 @@ const run = async () => {
   }
 
   head('13. [MANUAL] OTP flow');
-  // Against a real host this run's own address cannot receive mail, so OTP_EMAIL names a test
-  // account whose inbox you can read, with OTP_CODE from the reset email sent to it. Its
-  // password is changed to the one below.
-  const OTP_EMAIL = process.env.OTP_EMAIL || EMAIL;
+  // The code section 8 sent to this run's own address. OTP_CODE in the environment wins.
   let OTP_CODE = process.env.OTP_CODE || '';
   if (OTP_CODE) {
     console.log(`  using OTP_CODE from the environment`);
   } else if (IS_LOCAL && MAILPIT_URL) {
-    const found = await readMailpitCode(OTP_EMAIL);
+    const found = await readMailpitCode(EMAIL);
     if (found) {
       OTP_CODE = found.code;
       console.log(`  using the code from Mailpit message ${found.id} (sent over real SMTP)`);
     }
   } else if (IS_LOCAL) {
-    const found = await readDevEmailCode(OTP_EMAIL);
+    const found = await readDevEmailCode(EMAIL);
     if (found) {
       OTP_CODE = found.code;
       console.log(`  using the code from ${path.relative(ROOT, found.file)}`);
     }
+  } else if (OTP_MAILBOX) {
+    OTP_CODE = await promptForCode(EMAIL);
   }
   if (OTP_CODE) {
-    await req('POST', '/auth/verify-otp', json({ email: OTP_EMAIL, code: OTP_CODE }));
+    await req('POST', '/auth/verify-otp', json({ email: EMAIL, code: OTP_CODE }));
     if (STATUS === '200') {ok('correct code → 200');}
     else {bad('correct code rejected', `${STATUS} ${BODY}`);}
     const RT = raw('resetToken');
@@ -568,7 +624,7 @@ const run = async () => {
     await req('POST', '/auth/reset-password', json({ resetToken: RT, password: 'another password' }));
     if (STATUS === '400') {ok('reset token is single-use');}
     else {bad('reset token reused successfully — single-use is firm', STATUS);}
-    await req('POST', '/auth/login', json({ email: OTP_EMAIL, password: 'a fresh long password' }));
+    await req('POST', '/auth/login', json({ email: EMAIL, password: 'a fresh long password' }));
     if (STATUS === '200') {ok('new password works');}
     else {bad('new password does not authenticate', STATUS);}
   } else {
@@ -577,7 +633,9 @@ const run = async () => {
         ? `skipped — no OTP_CODE, and no email for ${EMAIL} appeared in Mailpit (${MAILPIT_URL}) within 15s`
         : IS_LOCAL
         ? `skipped — no OTP_CODE, and no dev email for ${EMAIL} appeared within 5s in ${setting('EMAIL_DEV_DIR', '.dev-emails')}`
-        : `skipped — trigger a reset for a test account you can read mail for, then re-run with OTP_EMAIL=<its address> OTP_CODE=<6 digits>`
+        : OTP_MAILBOX
+        ? `skipped — no code entered for ${EMAIL}`
+        : `skipped — set OTP_EMAIL to a mailbox you can read and re-run; the run will ask for the code`
     );
   }
 

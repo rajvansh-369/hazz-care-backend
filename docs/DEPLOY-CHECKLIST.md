@@ -8,20 +8,17 @@ developer until every box is ticked.
 - [ ] **`npm run db:sync-indexes` ran against the staging database** before this version took
       traffic, and printed `Indexes in sync.`
 
-- [ ] **The contract checker is green, every section:**
+- [ ] **The contract checker is green, every section**, with `OTP_EMAIL` set to a mailbox you
+      can read (on the VPS: the staging Gmail address):
       ```bash
-      npm run contract -- https://<staging-host>/api/v1
+      OTP_EMAIL=<your inbox> npm run contract -- https://<staging-host>/api/v1
       ```
-      Sections 1–12 run on their own. Section 13 needs a real OTP, and the run's own
-      `contract+<stamp>@hajjcare.test` address cannot receive mail, so use a test account whose
-      inbox you can read (create it once, see HANDOVER-APP-DEV.md), trigger a reset for it, read
-      the code from the email, and re-run within 10 minutes:
-      ```bash
-      curl -s -X POST https://<staging-host>/api/v1/auth/forgot-password -H 'Content-Type: application/json' -d '{"email":"<test inbox>"}'
-      OTP_EMAIL=<test inbox> OTP_CODE=<6 digits> npm run contract -- https://<staging-host>/api/v1
-      ```
-      This changes that account's password to `a fresh long password`. A code works once:
-      trigger a fresh reset before every re-run, or section 13 fails with `invalid_otp`.
+      Staging sends real email, so `OTP_EMAIL` is required there: every account the run
+      registers becomes a `+contract-<stamp>-<n>` alias of that inbox, and nothing is sent to a
+      domain that does not exist (bounces hurt the sender's reputation). Section 13 pauses and
+      asks for the 6-digit code emailed to the address the run prints (the newest
+      *Your HajjCare password reset code* in that inbox); type it in within 10 minutes. Run it
+      in a terminal: without one, section 13 is skipped.
 
 - [ ] **An unknown auth path is NOT 404:**
       ```bash

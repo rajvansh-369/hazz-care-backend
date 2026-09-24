@@ -683,6 +683,21 @@ until the matching decision lands — a required-but-unused secret means the ser
 
 ## C6. Deployment
 
+**Target (decided 2026-09-24):** one Ubuntu VPS running `docker-compose.prod.yml` — MongoDB 7 as
+a one-node replica set in a container, the API, and Caddy for HTTPS (automatic Let's Encrypt).
+Exact commands: `docs/VPS-RUNBOOK.md`.
+
+- **MongoDB is never published.** Only Caddy has `ports:` (80, 443). Docker's published ports
+  bypass UFW, so a `ports:` entry on `mongo` or `api` would put it on the internet.
+- **Exactly one `api` replica** (the limiters below); `TRUST_PROXY=1` (Caddy is the one proxy).
+- **Gmail SMTP with an App Password is for staging only** (about 500 messages a day). Production
+  needs a transactional provider; that changes only `SMTP_URL` and `EMAIL_FROM`.
+- **Backups daily** from host cron: `deploy/backup-mongo.sh` (mongodump of the `hajjcare`
+  database, newest 14 kept); `deploy/restore-mongo.sh` restores. Off-server copies: not decided.
+- Against staging, run the contract checker with `OTP_EMAIL=<real inbox>`: every account it
+  registers is a plus-address of that inbox, so no mail is sent to `hajjcare.test`.
+- Local test of the exact production stack: `docker-compose.prod.local.yml` (Caddy on
+  localhost:8443 with its internal CA, Mailpit instead of Gmail).
 - How to deploy, and every production variable: `docs/DEPLOY.md`.
 - Run after every deploy to staging, through the real hostname: `docs/DEPLOY-CHECKLIST.md`.
 - What the Flutter developer gets (base URL, §8 decisions as implemented): `docs/HANDOVER-APP-DEV.md`.

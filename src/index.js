@@ -20,6 +20,9 @@ const start = async () => {
   server = app.listen(config.port, () => {
     logger.info(`${config.serviceName} listening on port ${config.port} [${config.env}]`);
   });
+  // Webhook events a previous process stored but never processed. In the background:
+  // never delays startup or the health check.
+  revenueCatService.recoverStranded();
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
 

@@ -8,6 +8,17 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 const SERVICE_NAME = 'hajjcare-api';
 
+const EMAIL_ADDRESS = Joi.string().email({ tlds: { allow: false } });
+/** `Display Name <address>` (the name optionally in double quotes); group 1 is the address. */
+const NAMED_MAILBOX = /^[^<>]*<([^<>\s]+)>$/;
+
+/** EMAIL_FROM: a bare address, or `Display Name <address>` as nodemailer accepts it. */
+const isMailbox = (value) => {
+  const named = NAMED_MAILBOX.exec(value.trim());
+  const address = named ? named[1] : value.trim();
+  return !EMAIL_ADDRESS.validate(address).error;
+};
+
 /** mongodb+srv://…, or a URL whose query string carries a non-empty replicaSet. */
 const REPLICA_SET_URL = /^mongodb\+srv:\/\/|[?&]replicaSet=[^&]+/i;
 
@@ -95,7 +106,8 @@ const envVarsSchema = Joi.object()
         }),
       }),
     EMAIL_FROM: Joi.string()
-      .email({ tlds: { allow: false } })
+      .custom((value, helpers) => (isMailbox(value) ? value : helpers.error('any.invalid')))
+      .messages({ 'any.invalid': '"EMAIL_FROM" must be an address or "Display Name <address>"' })
       .when('EMAIL_PROVIDER', { is: 'smtp', then: Joi.required() }),
     EMAIL_DEV_DIR: Joi.string().default('.dev-emails'),
     SMTP_URL: Joi.string()

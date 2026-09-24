@@ -77,10 +77,12 @@ contract; a change that breaks one of them breaks the app.
 
 ```bash
 npm run contract                                  # http://localhost:<PORT>/api/v1
-npm run contract -- https://staging.example/api/v1
+OTP_EMAIL=you@gmail.com npm run contract -- https://staging.example/api/v1
 ```
 
 `scripts/verify-contract.js` (and its bash twin `scripts/verify-contract.sh`) probes a live
 server for every client-breaking rule in `BACKEND_SPEC.md`. It must pass before the base URL is
-handed to the app developer. Section 13 needs the reset OTP: set `OTP_CODE`, or — against
-localhost only — it is read from the dev email directory.
+handed to the app developer. Against a server that sends real email, set `OTP_EMAIL` to a
+mailbox you can read: every account the run registers becomes a `+contract-…` alias of it, and
+section 13 asks for the reset code sent there. Against localhost the code is read from the dev
+email directory, or from Mailpit when `MAILPIT_URL` is set.

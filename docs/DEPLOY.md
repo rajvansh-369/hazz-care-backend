@@ -4,6 +4,9 @@ Platform-neutral. Any host that runs a container (or Node 22) behind HTTPS will 
 first deploy to staging, work through [DEPLOY-CHECKLIST.md](DEPLOY-CHECKLIST.md) before giving
 anyone the base URL.
 
+**The chosen target** is one Ubuntu VPS running `docker-compose.prod.yml` (MongoDB, the API,
+Caddy). Step-by-step commands: [VPS-RUNBOOK.md](VPS-RUNBOOK.md). This page explains the why.
+
 ## 1. MongoDB: a replica set is required
 
 Token rotation and password reset run in transactions, and a standalone `mongod` refuses them.

@@ -108,6 +108,91 @@ describe('config', () => {
       );
     });
 
+    test('the Gmail staging shape loads: smtps:// with a %40-encoded username, and a display-name sender', () => {
+      const smtpUrl = 'smtps://pilgrim.ops%40gmail.com:abcdefghijklmnop@smtp.gmail.com:465';
+      const config = production({ SMTP_URL: smtpUrl, EMAIL_FROM: 'HajjCare <pilgrim.ops@gmail.com>' });
+      expect(config.email.smtpUrl).toBe(smtpUrl);
+      expect(config.email.from).toBe('HajjCare <pilgrim.ops@gmail.com>');
+
+      // And nodemailer (which sends with it) decodes it to the Gmail account and implicit TLS.
+      // eslint-disable-next-line global-require
+      const transport = require('nodemailer').createTransport(smtpUrl);
+      expect(transport.options).toMatchObject({ host: 'smtp.gmail.com', port: 465, secure: true });
+      expect(transport.options.auth).toEqual({ user: 'pilgrim.ops@gmail.com', pass: 'abcdefghijklmnop' });
+    });
+
+    test('the port-587 fallback (outbound 465 blocked) loads and requires STARTTLS', () => {
+      const smtpUrl = 'smtp://pilgrim.ops%40gmail.com:abcdefghijklmnop@smtp.gmail.com:587?requireTLS=true';
+      expect(production({ SMTP_URL: smtpUrl }).email.smtpUrl).toBe(smtpUrl);
+      // eslint-disable-next-line global-require
+      const transport = require('nodemailer').createTransport(smtpUrl);
+      expect(transport.options).toMatchObject({ port: 587, secure: false, requireTLS: true });
+      expect(transport.options.auth.user).toBe('pilgrim.ops@gmail.com');
+    });
+
+    test.each([
+      ['a bare address', 'no-reply@hajjcare.example'],
+      ['Name <address>', 'HajjCare <no-reply@hajjcare.example>'],
+      ['"Quoted Name" <address>', '"HajjCare Staging" <no-reply@hajjcare.example>'],
+    ])('EMAIL_FROM accepts %s', (_label, from) => {
+      expect(production({ EMAIL_FROM: from }).email.from).toBe(from);
+    });
+
+    test.each([
+      ['a name alone', 'HajjCare'],
+      ['a bad address in brackets', 'HajjCare <not-an-address>'],
+      ['an unclosed bracket', 'HajjCare <no-reply@hajjcare.example'],
+      ['empty brackets', 'HajjCare <>'],
+    ])('EMAIL_FROM refuses %s', (_label, from) => {
+      expect(() => production({ EMAIL_FROM: from })).toThrow(/EMAIL_FROM" must be an address or "Display Name <address>"/);
+    });
+
+    describe('.env.production.example, as docker-compose.prod.yml supplies it', () => {
+      // eslint-disable-next-line global-require
+      const fs = require('fs');
+      // eslint-disable-next-line global-require
+      const path = require('path');
+      // eslint-disable-next-line global-require
+      const dotenv = require('dotenv');
+      const example = dotenv.parse(
+        fs.readFileSync(path.join(__dirname, '..', '..', '.env.production.example'), 'utf8')
+      );
+      // docker-compose.prod.yml's `environment:` block, which wins over the env file.
+      const composeEnvironment = {
+        NODE_ENV: 'production',
+        PORT: '5000',
+        MONGODB_URL: 'mongodb://mongo:27017/hajjcare?replicaSet=rs0',
+        TRUST_PROXY: '1',
+      };
+
+      test('refuses to start while the CHANGE_ME placeholders are still there', () => {
+        let message = '';
+        try {
+          loadConfig({ ...example, ...composeEnvironment });
+        } catch (error) {
+          ({ message } = error);
+        }
+        ['JWT_ACCESS_SECRET', 'OTP_HMAC_SECRET', 'RC_WEBHOOK_SECRET'].forEach((key) =>
+          expect(message).toContain(`"${key}" length must be at least 32`)
+        );
+      });
+
+      test('loads once the secrets are filled in, with the Gmail SMTP shape unchanged', () => {
+        const secret = 'q'.repeat(64);
+        const config = loadConfig({
+          ...example,
+          JWT_ACCESS_SECRET: secret,
+          OTP_HMAC_SECRET: secret,
+          RC_WEBHOOK_SECRET: secret,
+          ...composeEnvironment,
+        });
+        expect(config.isProduction).toBe(true);
+        expect(config.trustProxy).toBe(1);
+        expect(config.email.smtpUrl).toMatch(/^smtps:\/\/YOUR_ADDRESS%40gmail\.com:.*@smtp\.gmail\.com:465$/);
+        expect(config.email.from).toBe('HajjCare <YOUR_ADDRESS@gmail.com>');
+      });
+    });
+
     test('a standalone URL is still fine outside production (dev, test)', () => {
       expect(() => load({ MONGODB_URL: 'mongodb://127.0.0.1:27017/hajjcare' })).not.toThrow();
     });

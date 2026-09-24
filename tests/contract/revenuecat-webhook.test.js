@@ -508,6 +508,99 @@ describe('POST /webhooks/revenuecat', () => {
     });
   });
 
+  describe('startup recovery of events stranded by a crash', () => {
+    /** An event stored as if a previous process answered 200 and died before processing. */
+    const strand = async (event, { ageMs = 5 * 60 * 1000, ...fields } = {}) =>
+      RevenueCatEvent.create({
+        _id: event.id,
+        type: event.type,
+        appUserId: event.app_user_id,
+        aliases: event.aliases,
+        environment: event.environment,
+        entitlementIds: event.entitlement_ids,
+        rawBody: bodyOf(event),
+        receivedAt: new Date(Date.now() - ageMs),
+        ...fields,
+      });
+
+    it('processes stranded events oldest first, in the background, and logs the counts', async () => {
+      const info = jest.spyOn(logger, 'info');
+      const warn = jest.spyOn(logger, 'warn');
+      const user = await createUser();
+      const purchase = eventFor(user.id);
+      const refund = eventFor(user.id, { type: 'CANCELLATION', cancel_reason: 'CUSTOMER_SUPPORT' });
+      await strand(refund, { ageMs: 2 * 60 * 1000 });
+      await strand(purchase, { ageMs: 10 * 60 * 1000 });
+
+      expect(revenueCatService.recoverStranded()).toBeUndefined();
+      // Returned before doing anything: startup is not delayed.
+      expect((await stored(purchase.id)).processedAt).toBeNull();
+
+      await revenueCatService.idle();
+      expect((await stored(purchase.id)).processedAt).toBeInstanceOf(Date);
+      expect((await stored(refund.id)).processedAt).toBeInstanceOf(Date);
+      // Purchase first, then the refund: the pass ends up revoked, not re-granted.
+      expect((await entitlementOf(user.id)).revokedAt).toBeInstanceOf(Date);
+      expect(warn).toHaveBeenCalledWith('RevenueCat recovery: 2 stranded event(s) found, processing');
+      expect(info).toHaveBeenCalledWith('RevenueCat recovery: 2 of 2 stranded event(s) processed');
+    });
+
+    it('leaves alone events younger than 60 seconds, already processed, or with a processingError', async () => {
+      const user = await createUser();
+      const recent = eventFor(user.id);
+      const done = eventFor(user.id, { type: 'REFUND_REVERSED' });
+      const failed = eventFor(ANON, { aliases: [ANON] });
+      await strand(recent, { ageMs: 10 * 1000 });
+      const processedAt = new Date(Date.now() - 60 * 60 * 1000);
+      await strand(done, { processedAt });
+      await strand(failed, { processingError: 'unresolved' });
+
+      revenueCatService.recoverStranded();
+      await revenueCatService.idle();
+
+      expect((await stored(recent.id)).processedAt).toBeNull();
+      expect(await entitlementOf(user.id)).toBeNull();
+      expect((await stored(done.id)).processedAt).toEqual(processedAt);
+      expect((await stored(failed.id)).processingError).toBe('unresolved');
+    });
+
+    it('counts an event that is still unresolved after recovery as not processed', async () => {
+      const info = jest.spyOn(logger, 'info');
+      await strand(eventFor(ANON, { aliases: [ANON] }));
+      revenueCatService.recoverStranded();
+      await revenueCatService.idle();
+      expect(info).toHaveBeenCalledWith(expect.stringMatching(/0 of 1 stranded event\(s\) processed; the rest are unresolved/));
+    });
+
+    it('running recovery twice leaves the same state (idempotent)', async () => {
+      const user = await createUser();
+      await strand(eventFor(user.id));
+      revenueCatService.recoverStranded();
+      await revenueCatService.idle();
+      const once = await snapshot();
+      revenueCatService.recoverStranded();
+      await revenueCatService.idle();
+      expect(await snapshot()).toEqual(once);
+    });
+
+    it('a database failure during recovery is logged, never thrown', async () => {
+      const error = jest.spyOn(logger, 'error');
+      jest.spyOn(RevenueCatEvent, 'find').mockImplementationOnce(() => {
+        throw new Error('not primary');
+      });
+      revenueCatService.recoverStranded();
+      await revenueCatService.idle();
+      expect(error).toHaveBeenCalledWith('RevenueCat recovery failed: not primary');
+    });
+
+    it('with nothing stranded, logs so', async () => {
+      const info = jest.spyOn(logger, 'info');
+      revenueCatService.recoverStranded();
+      await revenueCatService.idle();
+      expect(info).toHaveBeenCalledWith('RevenueCat recovery: no stranded events');
+    });
+  });
+
   describe('secrets and header values are never logged', () => {
     it('neither the signature, the Authorization value nor the secrets reach the log', async () => {
       const lines = [];

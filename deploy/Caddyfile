@@ -1,0 +1,14 @@
+# HajjCare API behind Caddy (docker-compose.prod.yml). HTTPS with automatic Let's Encrypt
+# certificates for {$API_DOMAIN}; with API_DOMAIN=localhost Caddy uses its own internal CA.
+#
+# Forward EVERYTHING to the API unchanged. No path rewriting, no trailing-slash handling, no
+# custom error pages, no caching and no `encode` (the app compresses its own responses):
+# the Flutter client follows no redirects, and renders ANY 404 under /auth as "no account for
+# that email". If the API is down, Caddy answers 502, a 5xx the client treats as retryable.
+#
+# The only redirect is Caddy's automatic HTTP -> HTTPS on port 80. The app is only ever given
+# the https:// base URL, so nothing it calls is redirected.
+
+{$API_DOMAIN} {
+	reverse_proxy api:5000
+}
