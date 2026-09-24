@@ -2,7 +2,7 @@
 
 Everything here goes through the public hostname, the TLS terminator and whatever proxy, CDN or
 gateway the platform puts in front. That layer is where most of these break, and none of the
-repo's tests can see it. Replace `<staging-host>` throughout. Do not hand the base URL to the app
+repo's tests can see it. Staging is `api-staging.healthhub4u.co.uk`. Do not hand the base URL to the app
 developer until every box is ticked.
 
 - [ ] **`npm run db:sync-indexes` ran against the staging database** before this version took
@@ -11,7 +11,7 @@ developer until every box is ticked.
 - [ ] **The contract checker is green, every section**, with `OTP_EMAIL` set to a mailbox you
       can read (on the VPS: the staging Gmail address):
       ```bash
-      OTP_EMAIL=<your inbox> npm run contract -- https://<staging-host>/api/v1
+      OTP_EMAIL=<your inbox> npm run contract -- https://api-staging.healthhub4u.co.uk/api/v1
       ```
       Staging sends real email, so `OTP_EMAIL` is required there: every account the run
       registers becomes a `+contract-<stamp>-<n>` alias of that inbox, and nothing is sent to a
@@ -22,7 +22,7 @@ developer until every box is ticked.
 
 - [ ] **An unknown auth path is NOT 404:**
       ```bash
-      curl -i https://<staging-host>/api/v1/auth/nope
+      curl -i https://api-staging.healthhub4u.co.uk/api/v1/auth/nope
       ```
       Expect `503` with `{"code":"unavailable"}`. Hosting platforms and CDNs answer with their own
       HTML 404/502 pages, and the app renders **any** 404 as *"We could not find an account for
@@ -36,15 +36,15 @@ developer until every box is ticked.
 - [ ] **No redirects on the API hostname** — not HTTP→HTTPS, not trailing slash, not `www`. The
       app follows no redirects. Both of these must answer directly, never `301`/`302`/`307`/`308`:
       ```bash
-      curl -si -X POST https://<staging-host>/api/v1/auth/logout -H 'Content-Type: application/json' -d '{"refreshToken":""}' | head -1   # 204
-      curl -si https://<staging-host>/api/v1/health/ | head -1
+      curl -si -X POST https://api-staging.healthhub4u.co.uk/api/v1/auth/logout -H 'Content-Type: application/json' -d '{"refreshToken":""}' | head -1   # 204
+      curl -si https://api-staging.healthhub4u.co.uk/api/v1/health/ | head -1
       ```
 
 - [ ] **forgot-password answers well under 15 seconds** (the app's receive timeout), for a known
       and an unknown address alike, including the first request after the instance has been idle:
       ```bash
-      curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' -X POST https://<staging-host>/api/v1/auth/forgot-password -H 'Content-Type: application/json' -d '{"email":"<registered address>"}'
-      curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' -X POST https://<staging-host>/api/v1/auth/forgot-password -H 'Content-Type: application/json' -d '{"email":"nobody-<random>@example.com"}'
+      curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' -X POST https://api-staging.healthhub4u.co.uk/api/v1/auth/forgot-password -H 'Content-Type: application/json' -d '{"email":"<registered address>"}'
+      curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' -X POST https://api-staging.healthhub4u.co.uk/api/v1/auth/forgot-password -H 'Content-Type: application/json' -d '{"email":"nobody-<random>@example.com"}'
       ```
       Both `200`, both around the same time. A platform that sleeps idle instances can blow the
       15 seconds on a cold start: turn that off.

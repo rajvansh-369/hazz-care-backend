@@ -3,7 +3,8 @@
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
-# Configuration comes from .env.production (see .env.production.example; never committed).
+# Configuration: .env.production for the API (see .env.production.example) and deploy/caddy.env
+# for Caddy (see deploy/caddy.env.example). Neither is committed.
 # Local test of this exact stack: docker-compose.prod.local.yml.
 #
 # ONLY Caddy publishes ports (80, 443). Docker's published ports bypass UFW, so a `ports:` entry
@@ -114,8 +115,9 @@ services:
       - '443:443'
       # HTTP/3, which Caddy advertises in Alt-Svc. The app itself uses HTTP/1.1 or 2 over TCP.
       - '443:443/udp'
-    # Caddy reads API_DOMAIN (the site address in deploy/Caddyfile) from here; nothing else.
-    env_file: .env.production
+    # Only API_DOMAIN (the site address in deploy/Caddyfile). Never .env.production: Caddy has no
+    # business seeing the app's secrets.
+    env_file: deploy/caddy.env
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Certificates and ACME account. These MUST persist: re-issuing on every restart runs into

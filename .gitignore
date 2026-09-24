@@ -9,6 +9,8 @@ npm-debug.log*
 # Production secrets live only on the server; the example is committed.
 .env.production
 !.env.production.example
+# Caddy's own env file (API_DOMAIN only); the example is committed.
+deploy/caddy.env
 .DS_Store
 .idea/
 .vscode/

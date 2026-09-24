@@ -7,13 +7,14 @@ spec's §8 open questions as implemented, and what is not done yet.
 ## Base URL
 
 ```
-https://<staging-host>/api/v1
+https://api-staging.healthhub4u.co.uk/api/v1
 ```
 
-TODO: the staging hostname — not deployed yet.
+**Live once the staging deployment is verified with `docs/DEPLOY-CHECKLIST.md`.** Until then the
+hostname may not answer, or may answer with a server that is still being checked.
 
 ```bash
-flutter run --dart-define=HAJJCARE_API_BASE_URL=https://<staging-host>/api/v1
+flutter run --dart-define=HAJJCARE_API_BASE_URL=https://api-staging.healthhub4u.co.uk/api/v1
 ```
 
 Paths are appended verbatim (`…/api/v1/auth/login`), as §2 describes. The `/api/v1` prefix is
@@ -62,7 +63,7 @@ returns `{ "tokens": {…} }` with no `user`; every body is a bare JSON object; 
 Register from the app, or:
 
 ```bash
-curl -i -X POST https://<staging-host>/api/v1/auth/register \
+curl -i -X POST https://api-staging.healthhub4u.co.uk/api/v1/auth/register \
   -H 'Content-Type: application/json' -H 'Accept: application/json' \
   -d '{"email":"you+hajjcare-test@example.com","password":"correct horse battery","fullName":"Test Pilgrim"}'
 ```

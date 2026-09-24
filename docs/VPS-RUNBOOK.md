@@ -3,19 +3,41 @@
 One Ubuntu VPS running Docker Compose with three long-running services: MongoDB 7 (one-node
 replica set, never published), the API, and Caddy (HTTPS with automatic Let's Encrypt
 certificates, the only thing on ports 80/443). Files: `docker-compose.prod.yml`,
-`deploy/Caddyfile`, `.env.production.example`, `deploy/backup-mongo.sh`, `deploy/restore-mongo.sh`.
-Background and every variable: [DEPLOY.md](DEPLOY.md).
+`deploy/Caddyfile`, `deploy/caddy.env.example`, `.env.production.example`,
+`deploy/backup-mongo.sh`, `deploy/restore-mongo.sh`. Background and every variable:
+[DEPLOY.md](DEPLOY.md).
 
-Placeholders: `api.<domain>` is the API hostname, `<vps-ip>` the server's address, `deploy` the
-login user. Commands marked *laptop* run on your machine; everything else on the VPS.
+**Staging hostname: `api-staging.healthhub4u.co.uk`**; the app's base URL is `https://api-staging.healthhub4u.co.uk/api/v1`.
+`<vps-ip>` is the server's public IPv4 address and `deploy` the login user. Commands marked
+*laptop* run on your machine; everything else on the VPS.
 
 ## a. Requirements
 
 - Ubuntu **22.04 or 24.04**, a public IPv4 address.
 - **2 GB RAM or more** recommended. 1 GB works only with swap (below).
-- A domain with an **A record `api.<domain>` → `<vps-ip>`**. If there is an AAAA record for that
-  name it must point at this server too, or certificate issuance fails. Check from the laptop:
-  `dig +short api.<domain>`.
+- DNS for `api-staging.healthhub4u.co.uk` set up as in the next section.
+
+### DNS for `api-staging.healthhub4u.co.uk`
+
+In the DNS zone of `healthhub4u.co.uk`:
+
+- **An A record: name `api-staging` → `<vps-ip>`** (the VPS's public IPv4 address).
+- **IPv6:** if the VPS has an IPv6 address, either add a matching AAAA record (`api-staging` →
+  the VPS's IPv6 address) or add **no** AAAA record at all. A wrong AAAA record breaks certificate
+  issuance, and breaks the API for every client that connects over IPv6.
+- **If the zone is on Cloudflare:** the record must be **DNS only (grey cloud), never proxied**
+  (orange cloud). A proxy would put Cloudflare's own HTML error pages in front of the API (the
+  app reads any 404 as *"no account for that email"*), add a second proxy hop (so
+  `TRUST_PROXY=1` would be wrong and one pilgrim could rate-limit a whole hotel), and can get in
+  the way of Let's Encrypt.
+
+Check it from the laptop **before the first start** (step i); it must print `<vps-ip>` and
+nothing else:
+
+```bash
+dig +short api-staging.healthhub4u.co.uk
+dig +short AAAA api-staging.healthhub4u.co.uk      # empty, or the VPS's own IPv6 address
+```
 
 With 1 GB of RAM, add 2 GB of swap first:
 
@@ -135,7 +157,7 @@ done
 nano .env.production
 ```
 
-In the editor set `API_DOMAIN=api.<domain>`, and `SMTP_URL` and `EMAIL_FROM` from step h. The
+In the editor set `SMTP_URL` and `EMAIL_FROM` from step h. The
 API refuses to start while any secret is still `CHANGE_ME`. Keep a copy of this file somewhere
 safe off the server (a password manager): the secrets cannot be recovered from the database.
 
@@ -156,8 +178,26 @@ safe off the server (a password manager): the secrets cannot be recovered from t
 
 ## i. First start
 
+**First, DNS must already resolve to this server.** Starting Caddy before it does makes Let's
+Encrypt fail over and over, and repeated failures are rate-limited (you can be locked out of a
+certificate for an hour or more):
+
+```bash
+dig +short api-staging.healthhub4u.co.uk          # must print this VPS's IP. If not: stop and wait for DNS.
+```
+
+Caddy gets its own env file, holding only the hostname (never `.env.production`, so it cannot
+see the app's secrets):
+
 ```bash
 cd ~/hajjcare
+cp deploy/caddy.env.example deploy/caddy.env      # API_DOMAIN=api-staging.healthhub4u.co.uk
+chmod 600 deploy/caddy.env
+```
+
+Then start everything:
+
+```bash
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps
 ```
@@ -173,7 +213,7 @@ Caddy gets the certificate within a minute of the first request to the name. The
 laptop:
 
 ```bash
-curl -i https://api.<domain>/api/v1/health       # 200 {"status":"live"}
+curl -i https://api-staging.healthhub4u.co.uk/api/v1/health       # 200 {"status":"live"}
 ```
 
 To save typing, `echo 'export COMPOSE_FILE=docker-compose.prod.yml' >> ~/.bashrc` lets you drop the
@@ -211,8 +251,9 @@ A real restore into the live stack (drops and replaces every collection; asks fi
 ~/hajjcare/deploy/restore-mongo.sh /var/backups/hajjcare/hajjcare-<timestamp>.archive.gz
 ```
 
-These backups live on the same server they protect. TODO: copy them off the server (another
-machine or object storage); not decided yet.
+These backups live on the same server they protect: if the VPS or its disk is lost, so are
+they. **TODO: an off-server copy (another machine or object storage).** Not decided yet. It is
+**required before production**, not before staging: staging holds only test accounts.
 
 ## k. Updating
 
@@ -222,7 +263,7 @@ cd ~/hajjcare
 git pull --ff-only
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps        # sync-indexes Exited (0), api healthy
-curl -i https://api.<domain>/api/v1/health
+curl -i https://api-staging.healthhub4u.co.uk/api/v1/health
 ```
 
 `sync-indexes` runs by itself before the new API starts. The API is down for the few seconds it
@@ -255,7 +296,7 @@ host with `OTP_EMAIL` set to the staging Gmail address, so every account it regi
 `+contract-…` alias of that inbox and the reset email lands there:
 
 ```bash
-OTP_EMAIL=YOUR_ADDRESS@gmail.com npm run contract -- https://api.<domain>/api/v1
+OTP_EMAIL=YOUR_ADDRESS@gmail.com npm run contract -- https://api-staging.healthhub4u.co.uk/api/v1
 ```
 
 It stops at section 13 and asks for the code emailed to the address it prints; read it from the

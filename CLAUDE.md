@@ -687,6 +687,12 @@ until the matching decision lands — a required-but-unused secret means the ser
 a one-node replica set in a container, the API, and Caddy for HTTPS (automatic Let's Encrypt).
 Exact commands: `docs/VPS-RUNBOOK.md`.
 
+- **Hostnames (decided 2026-09-24):** staging is `api-staging.healthhub4u.co.uk`, so the Flutter
+  base URL is `https://api-staging.healthhub4u.co.uk/api/v1`. Production will be
+  `api.healthhub4u.co.uk`; it is reserved and not used anywhere yet.
+- **Caddy reads only `deploy/caddy.env`** (`API_DOMAIN`, nothing else; the example is committed,
+  the file is not). Never give Caddy `.env.production`: it would see every app secret.
+
 - **MongoDB is never published.** Only Caddy has `ports:` (80, 443). Docker's published ports
   bypass UFW, so a `ports:` entry on `mongo` or `api` would put it on the internet.
 - **Exactly one `api` replica** (the limiters below); `TRUST_PROXY=1` (Caddy is the one proxy).

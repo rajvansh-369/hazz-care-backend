@@ -6,7 +6,8 @@
 #   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml down -v
 #
 # Differences from production, and nothing else:
-#   - no .env.production: local-only placeholder secrets below (never reuse them anywhere);
+#   - no .env.production and no deploy/caddy.env: local-only placeholder values below (never
+#     reuse them anywhere);
 #   - API_DOMAIN=localhost, so Caddy issues a certificate from its own internal CA (hence
 #     NODE_TLS_REJECT_UNAUTHORIZED=0 for the local contract run only);
 #   - SMTP goes to Mailpit instead of Gmail (UI on 127.0.0.1:8025, for the checker);
@@ -35,6 +36,7 @@ services:
         condition: service_started
 
   caddy:
+    # Instead of deploy/caddy.env.
     env_file: !reset []
     environment:
       API_DOMAIN: localhost
