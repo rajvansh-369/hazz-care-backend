@@ -1,6 +1,6 @@
 'use strict';
 
-const { Token, User } = require('../models');
+const { Token } = require('../models');
 const config = require('../config/config');
 const tokenTypes = require('../config/tokenTypes');
 const userService = require('./user.service');
@@ -79,12 +79,6 @@ const logout = async (refreshToken) => {
 };
 
 /**
- * @param {string} userId
- * @returns {Promise<void>}
- */
-const logoutAll = async (userId) => tokenService.revokeAllUserTokens(userId);
-
-/**
  * Rotates a refresh token: the presented token is destroyed and a brand new pair
  * is issued, so a stolen refresh token is usable at most once.
  *
@@ -141,57 +135,11 @@ const resetPassword = async (resetPasswordToken, newPassword) => {
   await tokenService.revokeAllUserTokens(user.id);
 };
 
-/**
- * @param {string} verifyEmailToken
- * @returns {Promise<User>}
- */
-const verifyEmail = async (verifyEmailToken) => {
-  const tokenDoc = await tokenService.verifyStoredToken(verifyEmailToken, tokenTypes.VERIFY_EMAIL);
-  const user = await userService.getUserByIdOrFail(tokenDoc.user);
-  user.isEmailVerified = true;
-  await user.save();
-  await Token.deleteMany({ user: user.id, type: tokenTypes.VERIFY_EMAIL });
-  return user;
-};
-
-/**
- * @param {string} userId
- * @param {string} currentPassword
- * @param {string} newPassword
- * @returns {Promise<void>}
- */
-const changePassword = async (userId, currentPassword, newPassword) => {
-  const user = await User.findById(userId).select('+password');
-  if (!user) {
-    throw new ApiError(httpStatus.NOT_FOUND, 'User not found', {
-      code: errorCodes.account_not_found,
-    });
-  }
-  if (!(await user.isPasswordMatch(currentPassword))) {
-    throw new ApiError(httpStatus.UNAUTHORIZED, 'Current password is incorrect', {
-      code: errorCodes.invalid_credentials,
-      details: [{ field: 'currentPassword', message: 'Current password is incorrect' }],
-    });
-  }
-  if (currentPassword === newPassword) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'New password must differ from the current one', {
-      code: errorCodes.invalid_input,
-      details: [{ field: 'newPassword', message: 'New password must differ from the current one' }],
-    });
-  }
-  user.password = newPassword;
-  await user.save();
-  await tokenService.revokeAllUserTokens(user.id);
-};
-
 module.exports = {
   register,
   loginUserWithEmailAndPassword,
   logout,
-  logoutAll,
   refreshAuth,
   forgotPassword,
   resetPassword,
-  verifyEmail,
-  changePassword,
 };

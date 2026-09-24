@@ -1,86 +1,94 @@
 'use strict';
 
-const httpStatus = require('./httpStatus');
 const errorCodes = require('./errorCodes');
 
 /**
- * The single error type the application throws. Anything that reaches the error
- * handler as a plain Error is treated as a non-operational bug and reported as a
- * 500 without leaking internals.
+ * The single error type the application throws. It carries exactly what goes on
+ * the wire: an HTTP status, a contract error code, and optional field errors
+ * (BACKEND_SPEC.md §3.2). There is deliberately no default status or code — an
+ * error that is not an ApiError is unexpected and becomes 503 in the error handler.
+ *
+ * @typedef {{ field: string, code: string, message?: string }} FieldError
  */
 class ApiError extends Error {
   /**
-   * @param {number} statusCode HTTP status to return.
-   * @param {string} message Human readable message, safe to show to a client.
-   * @param {object} [options]
-   * @param {string} [options.code] Stable machine readable error code.
-   * @param {Array<{field: string, message: string}>} [options.details] Field level details.
-   * @param {boolean} [options.isOperational] False for programmer errors.
-   * @param {string} [options.stack] Preserve an original stack when re-wrapping.
+   * @param {number} status HTTP status to return.
+   * @param {string} code One of `errorCodes`.
+   * @param {FieldError[]} [fieldErrors]
    */
-  constructor(statusCode, message, options = {}) {
-    super(message);
-    const {
-      code = errorCodes.invalid_input,
-      details = [],
-      isOperational = true,
-      stack = '',
-    } = options;
-
+  constructor(status, code, fieldErrors = []) {
+    super(code);
     this.name = 'ApiError';
-    this.statusCode = statusCode;
+    this.status = status;
     this.code = code;
-    this.details = details;
-    this.isOperational = isOperational;
-
-    if (stack) {
-      this.stack = stack;
-    } else {
-      Error.captureStackTrace(this, this.constructor);
-    }
+    this.fieldErrors = Array.isArray(fieldErrors) ? fieldErrors : [];
+    Error.captureStackTrace(this, this.constructor);
   }
 
-  static badRequest(message = 'Invalid input', options = {}) {
-    return new ApiError(httpStatus.BAD_REQUEST, message, {
-      code: errorCodes.invalid_input,
-      ...options,
-    });
+  static emailTaken() {
+    return new ApiError(409, errorCodes.email_taken, [
+      { field: 'email', code: errorCodes.email_taken },
+    ]);
   }
 
-  static unauthorized(message = 'Invalid credentials', options = {}) {
-    return new ApiError(httpStatus.UNAUTHORIZED, message, {
-      code: errorCodes.invalid_credentials,
-      ...options,
-    });
+  static invalidCredentials() {
+    return new ApiError(401, errorCodes.invalid_credentials);
   }
 
-  static forbidden(message = 'Invalid credentials', options = {}) {
-    return new ApiError(httpStatus.FORBIDDEN, message, {
-      code: errorCodes.invalid_credentials,
-      ...options,
-    });
+  static passwordTooShort() {
+    return new ApiError(422, errorCodes.invalid_input, [
+      { field: 'password', code: errorCodes.password_too_short },
+    ]);
   }
 
-  static notFound(message = 'Not found', options = {}) {
-    return new ApiError(httpStatus.NOT_FOUND, message, {
-      code: errorCodes.invalid_input,
-      ...options,
-    });
+  static emailInvalid() {
+    return new ApiError(422, errorCodes.invalid_input, [
+      { field: 'email', code: errorCodes.email_invalid },
+    ]);
   }
 
-  static conflict(message = 'Email already registered', options = {}) {
-    return new ApiError(httpStatus.CONFLICT, message, {
-      code: errorCodes.email_taken,
-      ...options,
-    });
+  static invalidInput() {
+    return new ApiError(400, errorCodes.invalid_input);
   }
 
-  static internal(message = 'Something went wrong', options = {}) {
-    return new ApiError(httpStatus.INTERNAL_SERVER_ERROR, message, {
-      code: errorCodes.invalid_input,
-      isOperational: false,
-      ...options,
-    });
+  static invalidOtp() {
+    return new ApiError(400, errorCodes.invalid_otp, [
+      { field: 'code', code: errorCodes.invalid_otp },
+    ]);
+  }
+
+  static otpExpired() {
+    return new ApiError(400, errorCodes.otp_expired, [
+      { field: 'code', code: errorCodes.otp_expired },
+    ]);
+  }
+
+  static invalidResetToken() {
+    return new ApiError(400, errorCodes.invalid_reset_token, [
+      { field: 'resetToken', code: errorCodes.invalid_reset_token },
+    ]);
+  }
+
+  static tooManyAttempts() {
+    return new ApiError(429, errorCodes.too_many_attempts);
+  }
+
+  /** Only `POST /auth/refresh` may use this: it signs the pilgrim out. */
+  static sessionRevoked() {
+    return new ApiError(401, errorCodes.session_revoked);
+  }
+
+  static unauthorized() {
+    return new ApiError(401, errorCodes.unauthorized);
+  }
+
+  static unavailable() {
+    return new ApiError(503, errorCodes.unavailable);
+  }
+
+  /** For use OUTSIDE the auth router only — a 404 under /auth lies to the pilgrim. */
+  static notFound() {
+    return new ApiError(404, errorCodes.not_found);
   }
 }
 

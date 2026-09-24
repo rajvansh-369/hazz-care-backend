@@ -17,7 +17,6 @@ RUN apk add --no-cache tini
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
-COPY public ./public
 
 # Run unprivileged. The `node` user ships with the base image.
 USER node

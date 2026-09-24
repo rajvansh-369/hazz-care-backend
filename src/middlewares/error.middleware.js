@@ -1,167 +1,149 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const config = require('../config/config');
 const logger = require('../config/logger');
 const ApiError = require('../utils/ApiError');
-const httpStatus = require('../utils/httpStatus');
 const errorCodes = require('../utils/errorCodes');
+const { sendJson } = require('../utils/respond');
 
-const notFoundHandler = (req, res, next) => {
-  if (req.path.startsWith('/auth')) {
-    return next(
-      new ApiError(httpStatus.BAD_REQUEST, 'Invalid request', {
-        code: errorCodes.bad_request,
-      })
-    );
-  }
-  next(
-    new ApiError(httpStatus.NOT_FOUND, 'Not found', {
-      code: errorCodes.not_found,
-    })
-  );
-};
+const KNOWN_CODES = new Set(Object.values(errorCodes));
+const AUTH_PREFIX = `${config.apiPrefix.replace(/\/+$/, '')}/auth`.toLowerCase();
 
-const fromMongooseValidationError = (error) => {
-  const details = Object.values(error.errors || {}).map((fieldError) => ({
-    field: fieldError.path,
-    code: errorCodes.invalid_input,
-    message: fieldError.message,
-  }));
-  return new ApiError(httpStatus.UNPROCESSABLE_ENTITY, 'Invalid input', {
-    code: errorCodes.invalid_input,
-    details,
-    stack: error.stack,
-  });
-};
-
-const fromDuplicateKeyError = (error, req) => {
-  const field = Object.keys(error.keyPattern || error.keyValue || { field: 1 })[0];
-  // ONLY User.email on register → 409 email_taken
-  if (field === 'email' && req.path === '/register') {
-    return new ApiError(httpStatus.CONFLICT, 'Email already registered', {
-      code: errorCodes.email_taken,
-      details: [{ field: 'email', code: errorCodes.email_taken, message: 'Email already registered' }],
-      stack: error.stack,
-    });
-  }
-  // ANY other E11000 (Token.tokenHash, RevenueCatEvent._id, etc.) → 500 server_error, never 409
-  return new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Database error', {
-    code: errorCodes.server_error,
-    isOperational: false,
-    stack: error.stack,
-  });
-};
+/** Routes on which the client reads 401/403 as "That email and password do not match". */
+const NO_UNAUTHORIZED_ROUTES = new Set(['/register', '/forgot-password', '/verify-otp', '/reset-password']);
+/** Routes on which the client's 429 wording ("ask for a new code") makes no sense. */
+const NO_RATE_LIMIT_ROUTES = new Set(['/login', '/register']);
 
 /**
- * Normalises every thrown value into an ApiError before it reaches the handler.
- * Anything unrecognised becomes a non-operational 500, which the handler then
- * scrubs in production.
+ * The path below the auth router, e.g. "/login", or null when the request is not
+ * under it. Express matches paths case-insensitively and ignores a trailing slash,
+ * so this does too.
  */
-// eslint-disable-next-line no-unused-vars
-const errorConverter = (err, req, res, next) => {
-  let error = err;
-
-  if (!(error instanceof ApiError)) {
-    if (error instanceof mongoose.Error.ValidationError) {
-      error = fromMongooseValidationError(error);
-    } else if (error instanceof mongoose.Error.CastError) {
-      // CastError (malformed ObjectId) → 400, never 404
-      error = new ApiError(httpStatus.BAD_REQUEST, 'Invalid input', {
-        code: errorCodes.invalid_input,
-        details: [{ field: error.path, code: errorCodes.invalid_input, message: 'Invalid input' }],
-        stack: error.stack,
-      });
-    } else if (error && (error.code === 11000 || error.code === 11001)) {
-      error = fromDuplicateKeyError(error, req);
-    } else if (error instanceof mongoose.Error) {
-      error = new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Database operation failed', {
-        code: errorCodes.invalid_input,
-        isOperational: false,
-        stack: error.stack,
-      });
-    } else if (error && error.type === 'entity.parse.failed') {
-      error = new ApiError(httpStatus.BAD_REQUEST, 'Request body is not valid JSON', {
-        code: errorCodes.invalid_input,
-        stack: error.stack,
-      });
-    } else if (error && error.type === 'entity.too.large') {
-      error = new ApiError(httpStatus.PAYLOAD_TOO_LARGE, 'Request body is too large', {
-        code: errorCodes.payload_too_large,
-        stack: error.stack,
-      });
-    } else if (error && error.type === 'charset.unsupported') {
-      error = new ApiError(httpStatus.UNSUPPORTED_MEDIA_TYPE, 'Unsupported charset', {
-        code: errorCodes.unsupported_media_type,
-        stack: error.stack,
-      });
-    } else {
-      // Unrecognized error: log it, return 500 server_error
-      error = new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Internal server error', {
-        code: errorCodes.server_error,
-        isOperational: false,
-        stack: error && error.stack,
-      });
-    }
+const authSubPath = (req) => {
+  const path = (req.originalUrl || req.url || '').split('?')[0].toLowerCase();
+  if (path === AUTH_PREFIX) {
+    return '/';
   }
+  if (!path.startsWith(`${AUTH_PREFIX}/`)) {
+    return null;
+  }
+  const sub = path.slice(AUTH_PREFIX.length).replace(/\/+$/, '');
+  return sub || '/';
+};
 
-  next(error);
+/** Keeps only well-typed field errors: `field` and `code` strings, `message` a string or absent. */
+const toWireFieldErrors = (fieldErrors) =>
+  fieldErrors
+    .filter((entry) => entry && typeof entry.field === 'string' && typeof entry.code === 'string')
+    .map(({ field, code, message }) => ({
+      field,
+      code,
+      ...(typeof message === 'string' ? { message } : {}),
+    }));
+
+const toBody = (apiError) => {
+  const errors = toWireFieldErrors(apiError.fieldErrors);
+  return { code: apiError.code, ...(errors.length ? { errors } : {}) };
 };
 
 /**
- * Single place where an error becomes an HTTP response. Non-operational errors
- * are scrubbed in production so internals are never leaked to a client.
- * Response format per BACKEND_SPEC.md: {code, errors: [{field, code, message}]}
+ * Last line of defence for the status-code landmines (CLAUDE.md A3). A handler
+ * should never produce one of these; if it does, answering 503 is safe for the
+ * pilgrim while the log tells us which rule was about to be broken.
+ *
+ * @returns {string|null} the violated rule, or null when the error may go out as is
+ */
+const contractViolation = (req, apiError) => {
+  const { status, code } = apiError;
+  if (!KNOWN_CODES.has(code)) {
+    return `unknown error code "${code}"`;
+  }
+  if (status === 403) {
+    return '403 is never sent';
+  }
+  if (status >= 500 && status !== 503) {
+    return `${status} is never sent`;
+  }
+  const sub = authSubPath(req);
+  if (sub === null) {
+    return null;
+  }
+  if (status === 404) {
+    return '404 under the auth router';
+  }
+  if (status === 409 && code !== errorCodes.email_taken) {
+    return '409 under the auth router for something other than email_taken';
+  }
+  if (status === 401 && NO_UNAUTHORIZED_ROUTES.has(sub)) {
+    return `401 on ${sub}`;
+  }
+  if (status === 401 && sub === '/refresh' && code !== errorCodes.session_revoked) {
+    return '401 on /refresh without session_revoked';
+  }
+  if (status === 429 && NO_RATE_LIMIT_ROUTES.has(sub)) {
+    return `429 on ${sub}`;
+  }
+  return null;
+};
+
+const logUnexpected = (req, err, reason) => {
+  logger.error(reason, {
+    requestId: req.id,
+    method: req.method,
+    path: (req.originalUrl || '').split('?')[0],
+    errorName: err && err.name,
+    errorCode: err && err.code !== undefined ? String(err.code) : undefined,
+    stack: err && err.stack,
+  });
+};
+
+/** 404 for anything outside the auth router. The auth router has its own 503 catch-all. */
+const notFoundHandler = (req, res) => sendJson(res, 404, { code: errorCodes.not_found });
+
+/**
+ * Single place where an error becomes an HTTP response. Never defaults to 500, 401,
+ * 403, 404 or 409: anything not explicitly recognised is 503 {"code":"unavailable"},
+ * which the client treats as retryable and which never ends a session.
  */
 // eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, next) => {
-  let { statusCode, message } = err;
-  let { code, details = [], isOperational } = err;
-
-  if (config.isProduction && !isOperational) {
-    statusCode = httpStatus.INTERNAL_SERVER_ERROR;
-    message = 'Internal server error';
-  }
-
-  res.locals.errorMessage = err.message;
-
-  // CLAUDE.md §A3 rules 1-2: Never 404 or 409 under /auth except email_taken on register.
-  // Transform computed errors to prevent client misinterpretation.
-  if (req.path.startsWith('/auth')) {
-    if (statusCode === httpStatus.NOT_FOUND) {
-      statusCode = httpStatus.BAD_REQUEST;
-      code = errorCodes.bad_request;
-    } else if (statusCode === httpStatus.CONFLICT && code !== errorCodes.email_taken) {
-      statusCode = httpStatus.BAD_REQUEST;
-      code = errorCodes.bad_request;
-    }
-  }
-
-  const response = {
-    code: code || errorCodes.invalid_input,
-    ...(details && details.length ? { errors: details } : {}),
-  };
-
-  const logPayload = {
-    requestId: req.id,
-    method: req.method,
-    url: req.originalUrl,
-    statusCode,
-    code: response.code,
-    userId: req.principal ? req.principal.id : undefined,
-  };
-
-  if (statusCode >= httpStatus.INTERNAL_SERVER_ERROR) {
-    logger.error(`${message} :: ${err.stack || ''}`, logPayload);
-  } else {
-    logger.warn(message, logPayload);
-  }
-
   if (res.headersSent) {
-    return next(err);
+    logUnexpected(req, err, 'Error after the response was sent');
+    return undefined;
   }
 
-  return res.status(statusCode).json(response);
+  if (err instanceof ApiError) {
+    const violation = contractViolation(req, err);
+    if (violation) {
+      logUnexpected(req, err, `Contract guard: ${violation}`);
+      return sendJson(res, 503, { code: errorCodes.unavailable });
+    }
+    return sendJson(res, err.status, toBody(err));
+  }
+
+  // body-parser: malformed JSON and oversized bodies are the client's fault, not ours.
+  if (err && err.type === 'entity.parse.failed') {
+    return sendJson(res, 400, { code: errorCodes.invalid_input });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return sendJson(res, 413, { code: errorCodes.invalid_input });
+  }
+
+  // A duplicate key that reaches this point was not claimed by the register service,
+  // so it is a race or a bug — never "that email already has an account" (409).
+  if (err && err.code === 11000) {
+    logUnexpected(req, err, 'Unhandled duplicate key error');
+    return sendJson(res, 503, { code: errorCodes.unavailable });
+  }
+
+  // Mongoose ValidationError / CastError mean our own validation missed something.
+  if (err && (err.name === 'ValidationError' || err.name === 'CastError')) {
+    logUnexpected(req, err, `Unhandled Mongoose ${err.name}`);
+    return sendJson(res, 503, { code: errorCodes.unavailable });
+  }
+
+  logUnexpected(req, err, 'Unexpected error');
+  return sendJson(res, 503, { code: errorCodes.unavailable });
 };
 
-module.exports = { errorConverter, errorHandler, notFoundHandler };
+module.exports = { errorHandler, notFoundHandler, authSubPath };

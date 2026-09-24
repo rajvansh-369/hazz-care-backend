@@ -597,17 +597,47 @@ migrations: schema changes are Mongoose schemas and indexes.
 
 ## C5. Environment variables (Layer A only)
 
-Names as declared in `src/config/config.js`:
+Exactly the variables declared in `src/config/config.js` (defaults shown; `.env.example`
+has the same list). The process refuses to start on any value marked *pinned* or *min*.
 
 ```bash
-NODE_ENV=            PORT=            API_PREFIX=/api/v1
-MONGODB_URL=         MONGODB_REPLICA_SET=rs0         MONGODB_AUTO_INDEX=
-JWT_ACCESS_SECRET=   JWT_ACCESS_EXPIRATION_MINUTES=15
-JWT_REFRESH_EXPIRATION_DAYS=60                        # firm floor 45 — see A4
-JWT_RESET_PASSWORD_EXPIRATION_MINUTES=10
-RC_WEBHOOK_SECRET=              # RevenueCat shared secret, long and random, never logged
-CORS_ORIGINS=        TRUST_PROXY=     BODY_LIMIT=
-SMTP_URL=            MAIL_FROM=       LOG_LEVEL=info
+NODE_ENV=                        # production | development | test (required)
+PORT=5000
+API_PREFIX=/api/v1
+LOG_LEVEL=info
+CORS_ORIGINS=*
+TRUST_PROXY=0                    # reverse-proxy hops to trust
+
+MONGODB_URL=                     # required
+MONGODB_REPLICA_SET=             # e.g. rs0; transactions need a replica set
+MONGODB_AUTO_INDEX=true
+
+JWT_ACCESS_SECRET=               # required, min 32 chars
+ACCESS_TOKEN_TTL_SECONDS=900
+JWT_REFRESH_EXPIRATION_DAYS=60   # min 45 — firm floor, see A4
+REFRESH_ROTATION_GRACE_SECONDS=60
+RESET_TOKEN_TTL_SECONDS=600
+
+OTP_HMAC_SECRET=                 # required, min 32 chars (HMAC-SHA256 of OTP codes, §A11)
+OTP_TTL_SECONDS=600
+OTP_RESEND_AFTER_SECONDS=60
+OTP_LENGTH=6                     # pinned to 6
+OTP_MAX_ATTEMPTS=5               # min 5
+OTP_MAX_SENDS_PER_HOUR=5
+
+PASSWORD_MIN_LENGTH=8            # pinned to 8 — never stricter than the client
+BCRYPT_SALT_ROUNDS=12            # 10–15; removed with bcrypt when argon2id lands
+
+RATE_LIMIT_IP_PER_HOUR=300
+
+EMAIL_PROVIDER=dev               # dev | smtp; production refuses anything but smtp
+EMAIL_FROM=                      # required when smtp
+EMAIL_DEV_DIR=.dev-emails
+SMTP_URL=                        # required when smtp
+
+RC_WEBHOOK_SECRET=               # required, min 32 chars; never logged
+RC_WEBHOOK_HMAC_SECRET=          # optional, min 32 chars; never logged
+HAJJCARE_ENTITLEMENT_ID=hajjcare_pass
 ```
 
 Refresh tokens are opaque random strings stored as hashes, **not JWTs** — no refresh-token

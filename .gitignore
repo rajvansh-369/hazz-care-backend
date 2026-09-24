@@ -12,3 +12,6 @@ npm-debug.log*
 dist/
 build/
 tmp/
+
+# Local dev email output (EMAIL_PROVIDER=dev)
+.dev-emails/

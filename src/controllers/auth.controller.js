@@ -1,55 +1,25 @@
 'use strict';
 
-const httpStatus = require('../utils/httpStatus');
-const catchAsync = require('../utils/catchAsync');
+const errorCodes = require('../utils/errorCodes');
+const { sendJson } = require('../utils/respond');
 
-const register = catchAsync(async (req, res) => {
-  // Phase 3
-  res.status(httpStatus.CREATED).json({});
-});
-
-const login = catchAsync(async (req, res) => {
-  // Phase 3
-  res.status(httpStatus.OK).json({});
-});
-
-const refreshTokens = catchAsync(async (req, res) => {
-  // Phase 3
-  res.status(httpStatus.OK).json({});
-});
-
-const logout = catchAsync(async (req, res) => {
-  // Phase 3: 204 no body
-  res.status(httpStatus.NO_CONTENT).json({});
-});
-
-const forgotPassword = catchAsync(async (req, res) => {
-  // Phase 3
-  res.status(httpStatus.OK).json({});
-});
-
-const verifyOtp = catchAsync(async (req, res) => {
-  // Phase 3
-  res.status(httpStatus.OK).json({});
-});
-
-const resetPassword = catchAsync(async (req, res) => {
-  // Phase 3: 204 no body
-  res.status(httpStatus.NO_CONTENT).json({});
-});
-
-const me = catchAsync(async (req, res) => {
-  // Phase 3: return bare AuthUser
-  res.status(httpStatus.OK).json({});
-});
+/**
+ * Stubs. Each handler answers 503 {"code":"unavailable"} until the session that
+ * implements it lands — never 200 {}, which the client fails to parse as a session.
+ * 503 is retryable on the client and never ends a session.
+ *
+ * When a handler is implemented it must read `req.body || {}`, so a request that
+ * reached it without a parsed body cannot throw a TypeError. The stubs read nothing.
+ */
+const notImplemented = (req, res) => sendJson(res, 503, { code: errorCodes.unavailable });
 
 module.exports = {
-  register,
-  login,
-  refreshTokens,
-  logout,
-  forgotPassword,
-  verifyOtp,
-  resetPassword,
-  me,
+  register: notImplemented,
+  login: notImplemented,
+  refresh: notImplemented,
+  forgotPassword: notImplemented,
+  verifyOtp: notImplemented,
+  resetPassword: notImplemented,
+  logout: notImplemented,
+  me: notImplemented,
 };

@@ -3,7 +3,6 @@
 const Joi = require('joi');
 const pick = require('../utils/pick');
 const ApiError = require('../utils/ApiError');
-const httpStatus = require('../utils/httpStatus');
 const errorCodes = require('../utils/errorCodes');
 
 const SEGMENTS = ['params', 'query', 'body'];
@@ -69,12 +68,7 @@ const validate = (schema) => (req, res, next) => {
       code: errorCodes.invalid_input,
       message: d.message,
     }));
-    return next(
-      new ApiError(httpStatus.BAD_REQUEST, 'Invalid input', {
-        code: errorCodes.invalid_input,
-        details: errors,
-      })
-    );
+    return next(new ApiError(400, errorCodes.invalid_input, errors));
   }
 
   return next();

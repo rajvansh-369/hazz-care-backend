@@ -2,6 +2,7 @@
 
 const winston = require('winston');
 const config = require('./config');
+const { redactInfo } = require('./redact');
 
 const enumerateErrorFormat = winston.format((info) => {
   if (info instanceof Error) {
@@ -10,8 +11,15 @@ const enumerateErrorFormat = winston.format((info) => {
   return info;
 });
 
+/**
+ * Deep-redacts secrets (passwords, OTP codes, tokens, the Authorization header)
+ * anywhere in a logged object. Request bodies are never logged in the first place.
+ */
+const redactFormat = winston.format((info) => redactInfo(info));
+
 const developmentFormat = winston.format.combine(
   enumerateErrorFormat(),
+  redactFormat(),
   winston.format.colorize(),
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
   winston.format.splat(),
@@ -24,6 +32,7 @@ const developmentFormat = winston.format.combine(
 /** Production logs are JSON so they can be shipped to any log aggregator as-is. */
 const productionFormat = winston.format.combine(
   enumerateErrorFormat(),
+  redactFormat(),
   winston.format.timestamp(),
   winston.format.errors({ stack: true }),
   winston.format.json()
