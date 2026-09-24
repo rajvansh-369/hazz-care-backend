@@ -14,8 +14,13 @@
  *
  * No dependencies: Node's built-in fetch. Runs in PowerShell, cmd or any shell.
  *
- * Section 13 needs the OTP from the reset email. Set OTP_CODE=123456 in the environment, or — only
- * against localhost / 127.0.0.1 — it is read from the dev email directory (EMAIL_DEV_DIR).
+ * Section 13 needs the OTP from a reset email. Against a real host, trigger a reset for a test account
+ * whose inbox you can read and set OTP_EMAIL=<that address> OTP_CODE=123456 (the run then changes that
+ * account's password to "a fresh long password"). Or — only
+ * against localhost / 127.0.0.1 — it is read from the dev email directory (EMAIL_DEV_DIR), or,
+ * when MAILPIT_URL is set, from Mailpit's HTTP API (the docker-compose stack, real SMTP):
+ *
+ *   MAILPIT_URL=http://localhost:8025 npm run contract -- http://localhost:5000/api/v1
  *
  * Keep the sections, checks and messages in step with verify-contract.sh.
  */
@@ -266,6 +271,52 @@ const readDevEmailCode = async (to) => {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Section 13 helper — the OTP from Mailpit (local hosts only, and only with MAILPIT_URL set)
+// ---------------------------------------------------------------------------------------------
+
+const MAILPIT_URL = (process.env.MAILPIT_URL || '').replace(/\/+$/, '');
+
+/** The code on its own line in the plain-text body (src/templates/otpEmail.js). */
+const OTP_IN_TEXT = /^\s*(\d{6})\s*$/m;
+
+/**
+ * Newest message in Mailpit addressed to `to`, waiting up to 15s (the email is sent in the
+ * background, with retries). This goes through the real SMTP provider, unlike the dev directory.
+ * Never for a non-local host.
+ */
+const readMailpitCode = async (to) => {
+  if (!IS_LOCAL || !MAILPIT_URL) {
+    return null;
+  }
+  const query = encodeURIComponent(`to:"${to}"`);
+  const deadline = Date.now() + 15000;
+  do {
+    try {
+      const search = await fetch(`${MAILPIT_URL}/api/v1/search?query=${query}&limit=20`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const { messages = [] } = search.ok ? await search.json() : {};
+      const newest = messages
+        .filter((m) => (m.To || []).some((r) => String(r.Address).toLowerCase() === to.toLowerCase()))
+        .sort((a, b) => Date.parse(b.Created) - Date.parse(a.Created))[0];
+      if (newest) {
+        const message = await fetch(`${MAILPIT_URL}/api/v1/message/${encodeURIComponent(newest.ID)}`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        const match = message.ok ? OTP_IN_TEXT.exec((await message.json()).Text || '') : null;
+        if (match) {
+          return { code: match[1], id: newest.ID };
+        }
+      }
+    } catch (error) {
+      // Mailpit not up yet, or the message still arriving; try again.
+    }
+    await sleep(500);
+  } while (Date.now() < deadline);
+  return null;
+};
+
+// ---------------------------------------------------------------------------------------------
 // The checks
 // ---------------------------------------------------------------------------------------------
 
@@ -482,18 +533,28 @@ const run = async () => {
   }
 
   head('13. [MANUAL] OTP flow');
+  // Against a real host this run's own address cannot receive mail, so OTP_EMAIL names a test
+  // account whose inbox you can read, with OTP_CODE from the reset email sent to it. Its
+  // password is changed to the one below.
+  const OTP_EMAIL = process.env.OTP_EMAIL || EMAIL;
   let OTP_CODE = process.env.OTP_CODE || '';
   if (OTP_CODE) {
     console.log(`  using OTP_CODE from the environment`);
+  } else if (IS_LOCAL && MAILPIT_URL) {
+    const found = await readMailpitCode(OTP_EMAIL);
+    if (found) {
+      OTP_CODE = found.code;
+      console.log(`  using the code from Mailpit message ${found.id} (sent over real SMTP)`);
+    }
   } else if (IS_LOCAL) {
-    const found = await readDevEmailCode(EMAIL);
+    const found = await readDevEmailCode(OTP_EMAIL);
     if (found) {
       OTP_CODE = found.code;
       console.log(`  using the code from ${path.relative(ROOT, found.file)}`);
     }
   }
   if (OTP_CODE) {
-    await req('POST', '/auth/verify-otp', json({ email: EMAIL, code: OTP_CODE }));
+    await req('POST', '/auth/verify-otp', json({ email: OTP_EMAIL, code: OTP_CODE }));
     if (STATUS === '200') {ok('correct code → 200');}
     else {bad('correct code rejected', `${STATUS} ${BODY}`);}
     const RT = raw('resetToken');
@@ -507,14 +568,16 @@ const run = async () => {
     await req('POST', '/auth/reset-password', json({ resetToken: RT, password: 'another password' }));
     if (STATUS === '400') {ok('reset token is single-use');}
     else {bad('reset token reused successfully — single-use is firm', STATUS);}
-    await req('POST', '/auth/login', json({ email: EMAIL, password: 'a fresh long password' }));
+    await req('POST', '/auth/login', json({ email: OTP_EMAIL, password: 'a fresh long password' }));
     if (STATUS === '200') {ok('new password works');}
     else {bad('new password does not authenticate', STATUS);}
   } else {
     note(
-      IS_LOCAL
+      IS_LOCAL && MAILPIT_URL
+        ? `skipped — no OTP_CODE, and no email for ${EMAIL} appeared in Mailpit (${MAILPIT_URL}) within 15s`
+        : IS_LOCAL
         ? `skipped — no OTP_CODE, and no dev email for ${EMAIL} appeared within 5s in ${setting('EMAIL_DEV_DIR', '.dev-emails')}`
-        : `skipped — trigger a reset for ${EMAIL}, then re-run with OTP_CODE=<6 digits>`
+        : `skipped — trigger a reset for a test account you can read mail for, then re-run with OTP_EMAIL=<its address> OTP_CODE=<6 digits>`
     );
   }
 

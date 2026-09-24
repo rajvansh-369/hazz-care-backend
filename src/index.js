@@ -4,31 +4,12 @@ const app = require('./app');
 const config = require('./config/config');
 const logger = require('./config/logger');
 const database = require('./config/database');
+const emailService = require('./services/email.service');
+const { createShutdown } = require('./shutdown');
 
 let server;
 
-const shutdown = async (signal, exitCode = 0) => {
-  logger.info(`${signal} received, shutting down gracefully`);
-  const forceExit = setTimeout(() => {
-    logger.error('Graceful shutdown timed out, forcing exit');
-    process.exit(1);
-  }, 10000);
-  forceExit.unref();
-
-  try {
-    if (server) {
-      await new Promise((resolve) => server.close(resolve));
-      logger.info('HTTP server closed');
-    }
-    await database.disconnect();
-    logger.info('MongoDB connection closed');
-    clearTimeout(forceExit);
-    process.exit(exitCode);
-  } catch (error) {
-    logger.error(`Error during shutdown: ${error.message}`);
-    process.exit(1);
-  }
-};
+const shutdown = createShutdown({ getServer: () => server, emailService, database, logger });
 
 const start = async () => {
   await database.connect();

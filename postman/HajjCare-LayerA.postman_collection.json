@@ -1,14 +1,376 @@
 {
   "info": {
+    "_postman_id": "hajjcare-backend-layer-a",
     "name": "HajjCare Backend API - Layer A",
-    "description": "Production contract for Flutter client (Layer A only). See CLAUDE.md §A for spec.",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "_postman_id": "hajjcare-backend-layer-a"
+    "description": "The eight auth endpoints the Flutter client calls (BACKEND_SPEC.md §3), as implemented.\n\n- `baseUrl` ends in `/api/v1`; paths are appended verbatim.\n- Register and Login store `accessToken` and `refreshToken`; Refresh stores the rotated pair; Verify OTP stores `resetToken`.\n- Set `email` and `password` once; Forgot Password sends a 6-digit code to `email` (the dev server writes it to `.dev-emails/`; docker compose delivers it to Mailpit at http://localhost:8025). Put it in `otpCode`.\n- Only `/auth/me` carries an Authorization header. No other request needs one.\n- `POST /webhooks/revenuecat` is not built yet, so it is not here.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "item": [
+    {
+      "name": "Auth - Register",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200 || pm.response.code === 201) {",
+              "  const body = pm.response.json();",
+              "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+              "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"fullName\": \"Aisha Rahman\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/register",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "register"
+          ]
+        },
+        "description": "201 { tokens, user }. 409 email_taken; 422 invalid_input with password_too_short / email_invalid. `fullName` key always present; may be null."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200 || pm.response.code === 201) {",
+              "  const body = pm.response.json();",
+              "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+              "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "login"
+          ]
+        },
+        "description": "200 { tokens, user }. 401 invalid_credentials for a wrong password or an unknown address. Never 429."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Refresh",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200 || pm.response.code === 201) {",
+              "  const body = pm.response.json();",
+              "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+              "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/refresh",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "refresh"
+          ]
+        },
+        "description": "200 { tokens } (rotated; the previous token keeps working for 60s). 401 session_revoked only for a dead token — this signs the pilgrim out in the app. No Authorization header."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Forgot Password",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/forgot-password",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "forgot-password"
+          ]
+        },
+        "description": "200 { expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 } for every valid address, registered or not. 429 too_many_attempts after 5 sends per address per hour."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Verify OTP",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "  pm.collectionVariables.set('resetToken', pm.response.json().resetToken);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/verify-otp",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "verify-otp"
+          ]
+        },
+        "description": "200 { resetToken, expiresInSeconds: 600 } — never a session. 400 invalid_otp (wrong code or unknown address), 400 otp_expired, 429 too_many_attempts after 5 wrong codes."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Reset Password",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/reset-password",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "reset-password"
+          ]
+        },
+        "description": "204, no body, no tokens — sign in again with the new password. 400 invalid_reset_token (invalid, expired or already used), 422 password_too_short."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Logout",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/logout",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "logout"
+          ]
+        },
+        "description": "Always 204, including an unknown, revoked or empty (\"\") token. Revokes this one device's refresh token."
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Me",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/auth/me",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "me"
+          ]
+        },
+        "description": "200 with a bare AuthUser { id, email, fullName, emailVerified }. 401 for a missing, invalid or expired access token."
+      },
+      "response": []
+    }
+  ],
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:5000",
+      "value": "http://localhost:5000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "pilgrim@example.com",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "correct horse battery",
+      "type": "string"
+    },
+    {
+      "key": "otpCode",
+      "value": "",
       "type": "string"
     },
     {
@@ -25,266 +387,6 @@
       "key": "resetToken",
       "value": "",
       "type": "string"
-    }
-  ],
-  "item": [
-    {
-      "name": "Auth - Register",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "if (pm.response.code === 201) {",
-              "  var jsonData = pm.response.json();",
-              "  pm.environment.set('accessToken', jsonData.tokens.accessToken);",
-              "  pm.environment.set('refreshToken', jsonData.tokens.refreshToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123!\",\n  \"fullName\": \"John Doe\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/register",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "register"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Login",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "if (pm.response.code === 200) {",
-              "  var jsonData = pm.response.json();",
-              "  pm.environment.set('accessToken', jsonData.tokens.accessToken);",
-              "  pm.environment.set('refreshToken', jsonData.tokens.refreshToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123!\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/login",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "login"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Refresh",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "if (pm.response.code === 200) {",
-              "  var jsonData = pm.response.json();",
-              "  pm.environment.set('accessToken', jsonData.tokens.accessToken);",
-              "  pm.environment.set('refreshToken', jsonData.tokens.refreshToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/refresh",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "refresh"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Forgot Password",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"user@example.com\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/forgot-password",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "forgot-password"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Verify OTP",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "if (pm.response.code === 200) {",
-              "  var jsonData = pm.response.json();",
-              "  pm.environment.set('resetToken', jsonData.resetToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"user@example.com\",\n  \"code\": \"123456\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/verify-otp",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "verify-otp"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Reset Password",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"password\": \"NewSecurePass123!\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/reset-password",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "reset-password"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Logout",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/logout",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "logout"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Me (Get Current User)",
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{accessToken}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/auth/me",
-          "host": ["{{baseUrl}}"],
-          "path": ["auth", "me"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Webhooks - RevenueCat Event",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{rcWebhookSecret}}"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"event\": {\n    \"id\": \"event-id-123\",\n    \"type\": \"INITIAL_PURCHASE\",\n    \"app_user_id\": \"user-id\",\n    \"environment\": \"PRODUCTION\",\n    \"purchased_at_ms\": 1234567890000\n  }\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/webhooks/revenuecat",
-          "host": ["{{baseUrl}}"],
-          "path": ["webhooks", "revenuecat"]
-        }
-      },
-      "response": []
     }
   ]
 }

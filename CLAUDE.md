@@ -673,3 +673,17 @@ signing secret is needed.
 The PRS list of Apple / Google / Stripe / Tap / FCM / WhatsApp / weather / S3 /
 `FIELD_ENCRYPTION_KEY` variables belongs to Layer B. Do not add them to `src/config/config.js`
 until the matching decision lands — a required-but-unused secret means the service will not boot.
+
+## C6. Deployment
+
+- How to deploy, and every production variable: `docs/DEPLOY.md`.
+- Run after every deploy to staging, through the real hostname: `docs/DEPLOY-CHECKLIST.md`.
+- What the Flutter developer gets (base URL, §8 decisions as implemented): `docs/HANDOVER-APP-DEV.md`.
+- **One instance only**, until the per-IP rate limiters use a shared store. They count in process
+  memory, so N instances allow N times the limit. (The per-address OTP send limit is in MongoDB
+  and is already safe.)
+- `NODE_ENV=production` refuses to start unless `MONGODB_URL` is `mongodb+srv://` or carries
+  `replicaSet=` (transactions), and unless `EMAIL_PROVIDER=smtp` with `SMTP_URL` and `EMAIL_FROM`.
+- `docker compose up -d --build` runs the production image locally against a MongoDB replica set
+  and Mailpit; `MAILPIT_URL=http://localhost:8025 npm run contract -- http://localhost:5000/api/v1`
+  checks it end to end over real SMTP.

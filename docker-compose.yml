@@ -1,49 +1,86 @@
+# Local full stack: MongoDB (one-node replica set), Mailpit (SMTP catcher), the API.
+#
+#   docker compose up -d --build
+#   MAILPIT_URL=http://localhost:8025 npm run contract -- http://localhost:5000/api/v1
+#   docker compose down            # add -v to also drop the database volume
+#
+# Host ports: API 5000, MongoDB 27019 (27017 is the system MongoDB service, 27018 is
+# `npm run db:dev`), Mailpit SMTP 1025 and web UI http://localhost:8025.
+#
+# EVERY SECRET BELOW IS A LOCAL-ONLY PLACEHOLDER. Never reuse one anywhere else.
+
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: 5000
+  API_PREFIX: /api/v1
+  LOG_LEVEL: info
+  CORS_ORIGINS: '*'
+  TRUST_PROXY: 0
+  MONGODB_URL: mongodb://mongo:27017/hajjcare?replicaSet=rs0
+  JWT_ACCESS_SECRET: local-only-placeholder-jwt-access-secret-0000
+  OTP_HMAC_SECRET: local-only-placeholder-otp-hmac-secret-000000
+  RC_WEBHOOK_SECRET: local-only-placeholder-rc-webhook-secret-0000
+  EMAIL_PROVIDER: smtp
+  SMTP_URL: smtp://mailpit:1025
+  EMAIL_FROM: no-reply@hajjcare.local
+
 services:
   mongo:
     image: mongo:7
     restart: unless-stopped
-    environment:
-      MONGO_INITDB_DATABASE: node-mongo-boilerplate
     command: ['--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27019:27017'
     volumes:
       - mongo-data:/data/db
+    # Initiates the replica set on first start (member host "mongo:27017", which the
+    # api container resolves), then reports healthy only once this node is PRIMARY.
+    # From the host, connect with mongodb://localhost:27019/hajjcare?directConnection=true
     healthcheck:
-      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) }; if (!db.hello().isWritablePrimary) quit(1)"
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
 
-  mongo-init:
-    image: mongo:7
+  mailpit:
+    image: axllent/mailpit
+    restart: unless-stopped
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+
+  # One-shot, before the api takes traffic: the same step every deploy runs.
+  sync-indexes:
+    build: .
+    command: ['node', 'scripts/sync-indexes.js']
+    environment: *api-env
+    restart: 'no'
     depends_on:
       mongo:
         condition: service_healthy
-    command: >
-      mongosh --host mongo:27017 --eval
-      "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] })"
-    restart: on-failure
 
   api:
     build: .
     restart: unless-stopped
-    command: ['node', 'src/index.js']
-    environment:
-      NODE_ENV: production
-      PORT: 5000
-      SERVICE_NAME: core-service
-      MONGODB_URL: mongodb://mongo:27017/node-mongo-boilerplate
-      MONGODB_REPLICA_SET: rs0
-      # Override every secret at deploy time; this value is a placeholder.
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or .env before composing}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      TRUST_PROXY: 1
-      LOG_LEVEL: info
-    depends_on:
-      mongo-init:
-        condition: service_completed_successfully
+    init: true
+    # Longer than the app's own 30-second shutdown backstop (src/shutdown.js).
+    stop_grace_period: 35s
+    environment: *api-env
     ports:
       - '5000:5000'
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      sync-indexes:
+        condition: service_completed_successfully
 
 volumes:
   mongo-data:

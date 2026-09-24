@@ -53,8 +53,6 @@ describe('config', () => {
     ['OTP_MAX_ATTEMPTS below 5', { OTP_MAX_ATTEMPTS: '3' }],
     ['PASSWORD_MIN_LENGTH 7', { PASSWORD_MIN_LENGTH: '7' }],
     ['PASSWORD_MIN_LENGTH 10 (stricter than the client)', { PASSWORD_MIN_LENGTH: '10' }],
-    ['production with EMAIL_PROVIDER dev', { NODE_ENV: 'production', EMAIL_PROVIDER: 'dev' }],
-    ['production with EMAIL_PROVIDER left at its default', { NODE_ENV: 'production' }],
     ['smtp without SMTP_URL', { EMAIL_PROVIDER: 'smtp', EMAIL_FROM: 'a@b.co' }],
     ['smtp without EMAIL_FROM', { EMAIL_PROVIDER: 'smtp', SMTP_URL: 'smtp://mail.example.com' }],
     ['an unknown EMAIL_PROVIDER', { EMAIL_PROVIDER: 'sendgrid' }],
@@ -65,15 +63,54 @@ describe('config', () => {
     expect(() => load(overrides)).toThrow(/Invalid environment configuration/);
   });
 
-  test('production with smtp, SMTP_URL and EMAIL_FROM loads', () => {
-    const config = load({
-      NODE_ENV: 'production',
-      EMAIL_PROVIDER: 'smtp',
-      SMTP_URL: 'smtp://mail.example.com:587',
-      EMAIL_FROM: 'no-reply@hajjcare.example',
+  describe('production', () => {
+    // Everything production needs; each case below breaks exactly one rule.
+    const production = (overrides = {}) =>
+      load({
+        NODE_ENV: 'production',
+        MONGODB_URL: 'mongodb://db1.internal:27017/hajjcare?replicaSet=rs0',
+        EMAIL_PROVIDER: 'smtp',
+        SMTP_URL: 'smtp://mail.example.com:587',
+        EMAIL_FROM: 'no-reply@hajjcare.example',
+        ...overrides,
+      });
+
+    test('smtp, SMTP_URL, EMAIL_FROM and a replica-set URL load', () => {
+      const config = production();
+      expect(config.isProduction).toBe(true);
+      expect(config.email.provider).toBe('smtp');
     });
-    expect(config.isProduction).toBe(true);
-    expect(config.email.provider).toBe('smtp');
+
+    test.each([
+      ['EMAIL_PROVIDER dev', { EMAIL_PROVIDER: 'dev' }, /EMAIL_PROVIDER/],
+      ['EMAIL_PROVIDER left at its default', { EMAIL_PROVIDER: undefined }, /EMAIL_PROVIDER/],
+      ['smtp without SMTP_URL', { SMTP_URL: undefined }, /SMTP_URL/],
+    ])('refuses to start: %s', (_label, overrides, key) => {
+      expect(() => production(overrides)).toThrow(key);
+    });
+
+    test.each([
+      ['mongodb+srv:// (Atlas)', 'mongodb+srv://user:pass@cluster0.abcde.mongodb.net/hajjcare?retryWrites=true&w=majority'],
+      ['replicaSet= as the first parameter', 'mongodb://mongo:27017/hajjcare?replicaSet=rs0'],
+      ['replicaSet= after other parameters', 'mongodb://a:27017,b:27017/hajjcare?authSource=admin&replicaSet=rs0'],
+    ])('accepts a replica-set MONGODB_URL: %s', (_label, url) => {
+      expect(production({ MONGODB_URL: url }).mongoose.url).toBe(url);
+    });
+
+    test.each([
+      ['a standalone URL', 'mongodb://127.0.0.1:27017/hajjcare'],
+      ['other parameters but no replicaSet', 'mongodb://mongo:27017/hajjcare?authSource=admin'],
+      ['an empty replicaSet', 'mongodb://mongo:27017/hajjcare?replicaSet='],
+      ['replicaSet in the path, not the query', 'mongodb://mongo:27017/replicaSet=rs0'],
+    ])('refuses to start (transactions need a replica set): %s', (_label, url) => {
+      expect(() => production({ MONGODB_URL: url })).toThrow(
+        /MONGODB_URL" must be a mongodb\+srv:\/\/ URL or include replicaSet=/
+      );
+    });
+
+    test('a standalone URL is still fine outside production (dev, test)', () => {
+      expect(() => load({ MONGODB_URL: 'mongodb://127.0.0.1:27017/hajjcare' })).not.toThrow();
+    });
   });
 
   test('OTP_MAX_ATTEMPTS above 5 is allowed', () => {

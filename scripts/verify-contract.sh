@@ -10,8 +10,9 @@
 #
 # Requires: curl, jq
 #
-# Checks marked [MANUAL] need an OTP you can only read from the email. Run them by exporting
-# OTP_CODE=123456 after triggering a reset for $EMAIL, then re-running.
+# Checks marked [MANUAL] need an OTP you can only read from the email. This run's own address
+# cannot receive mail, so trigger a reset for a test account whose inbox you can read, then export
+# OTP_EMAIL=<that address> OTP_CODE=123456 and re-run (its password becomes "a fresh long password").
 
 set -uo pipefail
 BASE="${1:-http://localhost:3000/v1}"
@@ -216,8 +217,9 @@ for p in /auth/register /auth/forgot-password /auth/verify-otp /auth/reset-passw
 done
 
 head_ "13. [MANUAL] OTP flow"
+OTP_EMAIL="${OTP_EMAIL:-$EMAIL}"
 if [ -n "${OTP_CODE:-}" ]; then
-  req POST /auth/verify-otp "{\"email\":\"$EMAIL\",\"code\":\"$OTP_CODE\"}"
+  req POST /auth/verify-otp "{\"email\":\"$OTP_EMAIL\",\"code\":\"$OTP_CODE\"}"
   [ "$STATUS" = "200" ] && ok "correct code → 200" || bad "correct code rejected" "$STATUS $BODY"
   RT="$(jqt '.resetToken')"
   [ "$(jqt '.resetToken | type')" = "string" ] && ok "resetToken returned" || bad "resetToken missing"
@@ -227,10 +229,10 @@ if [ -n "${OTP_CODE:-}" ]; then
   [ "$STATUS" = "204" ] && ok "reset → 204" || bad "reset should be 204" "$STATUS"
   req POST /auth/reset-password "{\"resetToken\":\"$RT\",\"password\":\"another password\"}"
   [ "$STATUS" = "400" ] && ok "reset token is single-use" || bad "reset token reused successfully — single-use is firm" "$STATUS"
-  req POST /auth/login "{\"email\":\"$EMAIL\",\"password\":\"a fresh long password\"}"
+  req POST /auth/login "{\"email\":\"$OTP_EMAIL\",\"password\":\"a fresh long password\"}"
   [ "$STATUS" = "200" ] && ok "new password works" || bad "new password does not authenticate" "$STATUS"
 else
-  printf '  \033[33m•\033[0m skipped — trigger a reset for %s, then re-run with OTP_CODE=<6 digits>\n' "$EMAIL"
+  printf '  \033[33m•\033[0m skipped — trigger a reset for a test account you can read mail for, then re-run with OTP_EMAIL=<its address> OTP_CODE=<6 digits>\n'
 fi
 
 printf '\n\033[1mPassed: %d   Failed: %d\033[0m\n' "$PASS" "$FAIL"

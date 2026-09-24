@@ -8,6 +8,9 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 const SERVICE_NAME = 'hajjcare-api';
 
+/** mongodb+srv://…, or a URL whose query string carries a non-empty replicaSet. */
+const REPLICA_SET_URL = /^mongodb\+srv:\/\/|[?&]replicaSet=[^&]+/i;
+
 /**
  * Every environment variable the application depends on is declared and validated
  * here. The process fails fast when the environment is not usable, so a
@@ -29,7 +32,21 @@ const envVarsSchema = Joi.object()
       .description('Comma separated list of allowed origins, or * for all'),
     TRUST_PROXY: Joi.number().integer().min(0).default(0),
 
-    MONGODB_URL: Joi.string().required().description('MongoDB connection string'),
+    MONGODB_URL: Joi.string()
+      .required()
+      .description('MongoDB connection string')
+      .when('NODE_ENV', {
+        is: 'production',
+        // Token rotation and password reset run in transactions, which a standalone
+        // mongod refuses. A mongodb+srv:// URL (Atlas) discovers its replica set; any
+        // other URL must name it.
+        then: Joi.string().custom((value, helpers) =>
+          REPLICA_SET_URL.test(value) ? value : helpers.error('any.invalid')
+        ).messages({
+          'any.invalid':
+            '"MONGODB_URL" must be a mongodb+srv:// URL or include replicaSet=<name> when NODE_ENV is production',
+        }),
+      }),
     MONGODB_REPLICA_SET: Joi.string().description('MongoDB replica set name for transactions'),
     MONGODB_AUTO_INDEX: Joi.boolean().default(true),
 
