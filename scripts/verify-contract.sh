@@ -20,7 +20,11 @@ STAMP="$(date +%s)$RANDOM"
 EMAIL="contract+${STAMP}@hajjcare.test"
 EMAIL_UPPER="Contract+${STAMP}@HajjCare.test"
 PASSWORD="correct horse battery staple"
-LONG_PASSWORD="$(printf 'a%.0s' {1..120})ZZtail"   # >72 bytes — the bcrypt truncation probe
+# The truncation probe: two passwords that share their first 72 bytes and differ after.
+# bcrypt silently truncates at 72 bytes, so on a bcrypt server BOTH unlock the account.
+LONG_PREFIX="$(printf 'a%.0s' {1..80})"
+LONG_PASSWORD="${LONG_PREFIX}X"
+LONG_PASSWORD_SAME_72="${LONG_PREFIX}Y"
 
 ok()   { PASS=$((PASS+1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '      got: %s\n' "$2"; }
@@ -48,7 +52,8 @@ esac
   && ok "no data/success envelope" || bad "RULE 2: response is wrapped in an envelope" "$BODY"
 [ "$(jqt '.user.id | type')" = "string" ] \
   && ok "user.id is a JSON string" || bad "RULE 4: user.id must be a string" "$(jqt '.user.id')"
-[ -n "$(jqt '.user.id' | tr -d '[:space:]')" ] \
+# `// empty` so a missing id reads as blank, not as the string "null"
+[ -n "$(jqt '.user.id // empty | strings' | tr -d '[:space:]')" ] \
   && ok "user.id is non-blank" || bad "RULE 4: user.id is blank — the client refuses the session"
 EV="$(jqt '.user.emailVerified | type')"
 [ "$EV" = "boolean" ] || [ "$EV" = "null" ] \
@@ -60,7 +65,9 @@ EX="$(jqt '.tokens.expiresIn | type')"
   && ok "accessToken present" || bad "accessToken missing or not a string"
 [ "$(jqt '.tokens.refreshToken | type')" = "string" ] \
   && ok "refreshToken present" || bad "refreshToken missing or not a string"
-ACCESS="$(jqt '.tokens.accessToken')"; REFRESH="$(jqt '.tokens.refreshToken')"; UID="$(jqt '.user.id')"
+# USER_ID, not UID: UID is a readonly bash variable, so assigning to it silently fails.
+ACCESS="$(jqt '.tokens.accessToken')"; REFRESH="$(jqt '.tokens.refreshToken')"
+USER_ID="$(jqt '.user.id // empty | strings')"
 
 head_ "2. Register — duplicate, validation"
 req POST /auth/register "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"fullName\":\"Dup\"}"
@@ -79,11 +86,14 @@ case "$STATUS" in 200|201) ok "8-char password accepted" ;; *) bad "8 chars is t
 head_ "3. Passwords — no truncation, case-insensitive email"
 LONGMAIL="long+${STAMP}@hajjcare.test"
 req POST /auth/register "{\"email\":\"$LONGMAIL\",\"password\":\"$LONG_PASSWORD\",\"fullName\":\"Long\"}"
-case "$STATUS" in 200|201) ok "120+ char passphrase accepted" ;; *) bad "long passphrase rejected" "$STATUS" ;; esac
+case "$STATUS" in 200|201) ok "81-char passphrase accepted" ;; *) bad "long passphrase rejected" "$STATUS" ;; esac
 req POST /auth/login "{\"email\":\"$LONGMAIL\",\"password\":\"$LONG_PASSWORD\"}"
-[ "$STATUS" = "200" ] && ok "long passphrase authenticates (not bcrypt-truncated)" \
-  || bad "long passphrase does not authenticate — bcrypt 72-byte truncation?" "$STATUS"
-req POST /auth/login "{\"email\":\"${LONG_PASSWORD:0:72}\",\"password\":\"x\"}" >/dev/null 2>&1
+[ "$STATUS" = "200" ] && ok "long passphrase authenticates" \
+  || bad "long passphrase does not authenticate" "$STATUS"
+req POST /auth/login "{\"email\":\"$LONGMAIL\",\"password\":\"$LONG_PASSWORD_SAME_72\"}"
+[ "$STATUS" = "401" ] && [ "$(jqt '.code')" = "invalid_credentials" ] \
+  && ok "a different password sharing the first 72 bytes → 401 invalid_credentials (no truncation)" \
+  || bad "RULE: a different password sharing the first 72 bytes was not refused — the server truncates passwords (bcrypt?)" "$STATUS $BODY"
 
 req POST /auth/login "{\"email\":\"$EMAIL_UPPER\",\"password\":\"$PASSWORD\"}"
 [ "$STATUS" = "200" ] && ok "email matched case-insensitively" \
@@ -92,7 +102,7 @@ req POST /auth/login "{\"email\":\"$EMAIL_UPPER\",\"password\":\"$PASSWORD\"}"
 head_ "4. Login"
 req POST /auth/login "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
 [ "$STATUS" = "200" ] && ok "login → 200" || bad "login failed" "$STATUS $BODY"
-[ "$(jqt '.user.id')" = "$UID" ] && ok "user.id stable across register and login" \
+[ -n "$USER_ID" ] && [ "$(jqt '.user.id // empty | strings')" = "$USER_ID" ] && ok "user.id stable across register and login" \
   || bad "RULE 4: user.id changed — local health data would be orphaned"
 req POST /auth/login "{\"email\":\"$EMAIL\",\"password\":\"wrong password here\"}"
 [ "$STATUS" = "401" ] && ok "wrong password → 401" || bad "wrong password must be 401" "$STATUS"
@@ -118,7 +128,7 @@ head_ "6. /auth/me"
 req GET /auth/me "" "$ACCESS"
 [ "$STATUS" = "200" ] && ok "me → 200" || bad "me failed" "$STATUS $BODY"
 [ "$(jqt 'has("user")')" = "false" ] && ok "bare AuthUser, not wrapped in {user:…}" || bad "me must return a bare user object" "$BODY"
-[ "$(jqt '.id')" = "$UID" ] && ok "me returns the same id" || bad "id mismatch on /auth/me"
+[ -n "$USER_ID" ] && [ "$(jqt '.id // empty | strings')" = "$USER_ID" ] && ok "me returns the same id" || bad "id mismatch on /auth/me"
 req GET /auth/me "" "definitely.not.a.valid.token"
 [ "$STATUS" = "401" ] && ok "bad token → 401 (not 403)" || bad "RULE 6: expired/invalid token must be 401, never 403" "$STATUS"
 
@@ -160,7 +170,13 @@ req POST /auth/forgot-password "{\"email\":\"ghost+${STAMP}@hajjcare.test\"}"
 
 head_ "9. verify-otp"
 req POST /auth/verify-otp "{\"email\":\"$EMAIL\",\"code\":\"000000\"}"
-[ "$STATUS" = "400" ] || [ "$STATUS" = "429" ] && ok "wrong code → $STATUS" || bad "wrong code should be 400 invalid_otp" "$STATUS"
+WRONG_CODE="$(jqt '.code')"
+if { [ "$STATUS" = "400" ] && [ "$WRONG_CODE" = "invalid_otp" ]; } \
+   || { [ "$STATUS" = "429" ] && [ "$WRONG_CODE" = "too_many_attempts" ]; }; then
+  ok "wrong code → $STATUS $WRONG_CODE"
+else
+  bad "wrong code should be 400 invalid_otp (or 429 too_many_attempts if locked out)" "$STATUS $BODY"
+fi
 [ "$STATUS" != "404" ] && ok "not 404" || bad "RULE 7: verify-otp must never 404"
 req POST /auth/verify-otp "{\"email\":\"ghost+${STAMP}@hajjcare.test\",\"code\":\"000000\"}"
 [ "$(jqt '.code')" = "invalid_otp" ] && ok "unknown address → invalid_otp, same as a wrong code" \

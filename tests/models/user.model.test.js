@@ -1,6 +1,5 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const { User } = require('../../src/models');
 
 describe('User Model', () => {
@@ -122,7 +121,6 @@ describe('User Model', () => {
         fullName: 'Test User',
       });
 
-      const plaintext = user.passwordHash;
       await user.validate();
       expect(user.passwordHash).toBeDefined();
       // After hashing, the value will be different (and much longer for bcrypt)

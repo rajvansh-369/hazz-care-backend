@@ -2,75 +2,57 @@
 
 ## Why Required
 
-Password reset transaction needs atomic writes (§A8):
-1. Mark reset token consumed
-2. Update user password
-3. Revoke all refresh tokens
+Two operations must be atomic across several documents (CLAUDE.md §A8, §A11):
 
-A crash between these leaves the account in an inconsistent state. Mongoose transactions require a MongoDB replica set.
+- **Password reset** — mark the reset token consumed, update the password hash, revoke the
+  user's refresh tokens.
+- **Refresh-token rotation** — issue the successor and link the previous token to it.
+
+A crash part-way through leaves an account inconsistent. MongoDB transactions require a replica
+set; a standalone `mongod` refuses them. A single-node replica set is enough for development and CI.
 
 ## Configuration
 
-Environment variable: `MONGODB_REPLICA_SET`
+Point `MONGODB_URL` at the replica set. Either put the set name in the URL
+(`?replicaSet=rs0`) or set `MONGODB_REPLICA_SET`, which `src/config/config.js` adds to the
+connection options:
 
 ```bash
 # .env
-MONGODB_REPLICA_SET=rs0  # or your replica set name
-```
-
-Mongoose connection will automatically add `replicaSet` option to connection parameters (src/config/config.js line 82):
-
-```javascript
-...(envVars.MONGODB_REPLICA_SET && { replicaSet: envVars.MONGODB_REPLICA_SET })
+MONGODB_URL=mongodb://127.0.0.1:27018/hajjcare?replicaSet=rs0
+# MONGODB_REPLICA_SET=rs0   # alternative to ?replicaSet= in the URL
 ```
 
 ## Development Setup
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: `npm run db:dev` (recommended)
 
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  mongodb:
-    image: mongo:7.0
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: password
-    command: --replSet rs0
-    volumes:
-      - mongo_data:/data/db
+No install and no admin rights: `scripts/dev-replset.js` runs a one-node replica set named `rs0`
+on **port 27018** using `mongodb-memory-server` (already a dev dependency). Data is kept in
+`.dev-data/` (wiredTiger, gitignored) and survives restarts. It does not touch any other MongoDB
+on the machine — a standalone `mongod` on 27017 can keep running alongside it.
 
-volumes:
-  mongo_data:
-```
+Two terminals:
 
-Start MongoDB:
 ```bash
-docker-compose up -d mongodb
+# terminal 1 — the database; stays in the foreground, Ctrl+C to stop
+npm run db:dev
+
+# terminal 2 — the API
+npm run dev
 ```
 
-Initialize replica set (one-time):
+`.env` needs:
+
 ```bash
-docker-compose exec mongodb mongosh --eval "rs.initiate()"
+MONGODB_URL=mongodb://127.0.0.1:27018/hajjcare?replicaSet=rs0
 ```
 
-Verify:
-```bash
-docker-compose exec mongodb mongosh --eval "rs.status()"
-```
-
-Set env var:
-```bash
-export MONGODB_REPLICA_SET=rs0
-export MONGODB_URL=mongodb://root:password@localhost:27017/hazz-care?authSource=admin
-```
+To start from an empty database, stop `db:dev` and delete `.dev-data/`.
 
 ### Option 2: Local mongod (Manual)
 
-Start standalone MongoDB in replica set mode:
+Start a MongoDB server in replica set mode:
 
 ```bash
 mongod --replSet rs0 --dbpath /path/to/data
@@ -91,43 +73,33 @@ mongosh
 
 Set env var:
 ```bash
-export MONGODB_REPLICA_SET=rs0
-export MONGODB_URL=mongodb://localhost:27017/hazz-care
+MONGODB_URL=mongodb://localhost:27017/hajjcare?replicaSet=rs0
 ```
 
 ### Option 3: MongoDB Atlas (Cloud)
 
-Atlas clusters are replica sets by default.
+Atlas clusters are replica sets by default, and the `mongodb+srv://` URL discovers the set on its
+own — do not set `MONGODB_REPLICA_SET`.
 
 Copy connection string from Atlas dashboard:
 ```bash
-export MONGODB_URL="mongodb+srv://user:password@cluster.mongodb.net/hazz-care?retryWrites=true&w=majority"
-export MONGODB_REPLICA_SET=atlas  # or your cluster name
+MONGODB_URL="mongodb+srv://user:password@cluster.mongodb.net/hajjcare?retryWrites=true&w=majority"
 ```
 
 ## Testing
 
-Replica set is active when:
+The test suite needs none of this: suites that use transactions start their own in-memory
+replica set (`tests/utils/setupTestDB.js`).
+
+To check a running server, `GET /api/v1/health/ready` reports `"mongodb": "up"`. To check the
+database itself:
 
 ```bash
-mongosh
+mongosh "mongodb://127.0.0.1:27018/?replicaSet=rs0"
 > rs.status()
 ```
 
-Returns:
-```json
-{
-  "ok" : 1,
-  "members" : [
-    {
-      "name" : "localhost:27017",
-      "health" : 1,
-      "state" : 1,  // 1 = PRIMARY
-      "stateStr" : "PRIMARY"
-    }
-  ]
-}
-```
+`stateStr` should be `PRIMARY` for the single member.
 
 ## Checking in Code
 

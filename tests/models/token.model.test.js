@@ -1,7 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const { Token, User } = require('../../src/models');
+const { Token } = require('../../src/models');
 
 describe('Token Model', () => {
   let userId;
@@ -196,7 +196,7 @@ describe('Token Model', () => {
 
       try {
         await token.validate();
-        fail('Should have thrown validation error');
+        throw new Error('Should have thrown validation error');
       } catch (error) {
         expect(error).toBeDefined();
       }

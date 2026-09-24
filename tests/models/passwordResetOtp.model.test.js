@@ -1,6 +1,5 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const { PasswordResetOtp } = require('../../src/models');
 
 describe('PasswordResetOtp Model', () => {

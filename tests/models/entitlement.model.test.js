@@ -1,7 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const { Entitlement, User } = require('../../src/models');
+const { Entitlement } = require('../../src/models');
 
 describe('Entitlement Model', () => {
   let userId;
@@ -265,7 +265,7 @@ describe('Entitlement Model', () => {
 
   describe('Integration: RevenueCat → Entitlement', () => {
     it('should track entitlement created by INITIAL_PURCHASE', () => {
-      const rcEventUserId = 'rc_user_123';
+      // RevenueCat app_user_id 'rc_user_123' has been resolved to userId.
       const now = new Date();
 
       const ent = new Entitlement({

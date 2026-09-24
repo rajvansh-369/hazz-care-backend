@@ -1,6 +1,5 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const { RevenueCatEvent } = require('../../src/models');
 
 describe('RevenueCatEvent Model', () => {

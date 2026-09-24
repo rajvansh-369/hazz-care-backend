@@ -1,6 +1,5 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const setupTestDB = require('../utils/setupTestDB');
 const { User, Token, PasswordResetOtp } = require('../../src/models');
 
@@ -23,7 +22,7 @@ describe('Schema Constraints (E11000 Duplicate Key)', () => {
           email,
           passwordHash: 'hash2_minimum_8ch',
         });
-        fail('Should have thrown E11000');
+        throw new Error('Should have thrown E11000');
       } catch (error) {
         expect(error.code).toBe(11000);
         expect(error.message).toContain('email');
@@ -43,7 +42,7 @@ describe('Schema Constraints (E11000 Duplicate Key)', () => {
           email: 'test@example.com',
           passwordHash: 'hash2_minimum_8ch',
         });
-        fail('Should have thrown E11000');
+        throw new Error('Should have thrown E11000');
       } catch (error) {
         expect(error.code).toBe(11000);
       }
@@ -81,7 +80,7 @@ describe('Schema Constraints (E11000 Duplicate Key)', () => {
           type: 'refresh',
           expiresAt,
         });
-        fail('Should have thrown E11000');
+        throw new Error('Should have thrown E11000');
       } catch (error) {
         expect(error.code).toBe(11000);
         expect(error.message).toContain('tokenHash');
@@ -226,7 +225,7 @@ describe('Schema Constraints (E11000 Duplicate Key)', () => {
           appUserId: 'user123',
           raw: { test: true },
         });
-        fail('Should have thrown E11000');
+        throw new Error('Should have thrown E11000');
       } catch (error) {
         // E11000 means already processed; service drops it
         expect(error.code).toBe(11000);
@@ -253,7 +252,7 @@ describe('Schema Constraints (E11000 Duplicate Key)', () => {
           codeHash,
           expiresAt,
         });
-        fail('Should have thrown E11000');
+        throw new Error('Should have thrown E11000');
       } catch (error) {
         expect(error.code).toBe(11000);
         expect(error.message).toContain('codeHash');

@@ -15,3 +15,6 @@ tmp/
 
 # Local dev email output (EMAIL_PROVIDER=dev)
 .dev-emails/
+
+# Local development replica set data (npm run db:dev)
+.dev-data/

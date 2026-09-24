@@ -16,7 +16,9 @@
     "test:coverage": "cross-env NODE_ENV=test jest --runInBand --coverage",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"**/*.{js,json,md,css,html}\""
+    "format": "prettier --write \"**/*.{js,json,md,css,html}\"",
+    "db:dev": "node scripts/dev-replset.js",
+    "contract": "node scripts/verify-contract.js"
   },
   "keywords": [
     "node",
