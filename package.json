@@ -16,8 +16,7 @@
     "test:coverage": "cross-env NODE_ENV=test jest --runInBand --coverage",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"**/*.{js,json,md,css,html}\"",
-    "seed": "node src/scripts/seed.js"
+    "format": "prettier --write \"**/*.{js,json,md,css,html}\""
   },
   "keywords": [
     "node",
