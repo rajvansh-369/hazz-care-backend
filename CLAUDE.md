@@ -2,7 +2,8 @@
 
 > **Product:** HajjCare — *Your Health. Your Hajj. Your Peace of Mind.*
 > **This repo:** the Node.js API that powers the HajjCare Flutter app.
-> **Reconciled:** PRS v2.0 (product spec) + BACKEND_SPEC.md (client contract, commit `040b977`).
+> **Reconciled:** PRS v2.0 (product spec) + BACKEND_SPEC.md (client contract, the revision
+> re-verified against the client on 24 September 2026).
 
 ---
 
@@ -30,7 +31,7 @@ key or code here requires a coordinated client release.
 
 ## A1. Scope
 
-Nine endpoints. Nothing else exists.
+Nine endpoints are in scope now: the eight in BACKEND_SPEC.md §3, plus the RevenueCat webhook.
 
 ```
 POST /auth/register
@@ -44,18 +45,28 @@ GET  /auth/me                 ← only endpoint with an Authorization header
 POST /webhooks/revenuecat     ← server-to-server, client never calls or waits on it
 ```
 
+BACKEND_SPEC.md §6c specifies six family-group endpoints. **Do not build them until the client
+screen that uses them exists.** The permission model (location-sharing consent) must not ship
+before the screen that sets it — an unenforced permission looks exactly like consent a pilgrim
+gave (§6c.3).
+
 ## A2. Transport
 
 | Rule | Value |
 |---|---|
-| Base path | The client's base URL already contains the version segment (`https://api.../v1`). Paths append verbatim → mount routes at the **root**, so the final URL is `<base>/auth/login`. **Not** `/api/v1`. |
+| Base path | The client's base URL carries any prefix and version segment, and paths append verbatim (BACKEND_SPEC.md §2, §8 item 2). Routes are mounted under `API_PREFIX=/api/v1`, so the base URL handed to the Flutter developer is `https://<host>/api/v1` and the final URL is `<base>/auth/login`. |
 | Body format | **Bare JSON object at the top level. No envelope.** `{"tokens":…, "user":…}` is correct; `{"success":true,"data":…}` fails to parse and the app is unusable. |
 | Key casing | camelCase in JSON, request and response. `refreshToken`, not `refresh_token`. |
 | Timeouts | Client: connect 10s, send 15s, receive 15s. Anything slower is indistinguishable from offline. |
 | Auth | `Authorization: Bearer <accessToken>` on `/auth/me` only. No cookies, no CSRF, no redirects. |
 
-**This replaces PRS §2's `{success, data, meta}` envelope and `/api/v1` base path.** Those were
-written before the client existed. The client has no envelope-unwrapping code.
+**This replaces PRS §2's `{success, data, meta}` envelope.** It was written before the client
+existed. The client has no envelope-unwrapping code.
+
+> **REVERSAL (2026-09-24) — `/api/v1` prefix.** An earlier version of this section said to mount
+> routes at the root and "**Not** `/api/v1`". BACKEND_SPEC.md §8 item 2 allows any prefix as long
+> as the base URL carries it, so routes now live under `API_PREFIX=/api/v1`. The envelope and
+> SCREAMING_SNAKE codes from PRS §2 remain superseded; only the prefix changed.
 
 ## A3. Error contract
 
@@ -77,18 +88,27 @@ generic banner. Renaming an existing one changes app behaviour silently.
 `message` is for our logs. Every user-facing word comes from the app's own translation files in
 seven languages. The server does **not** localize error text for the client.
 
-### The four status-code landmines
+### The status-code landmines
 
 1. **Never return `404` from any path under `/auth`**, including unknown routes and typos.
    The client renders any 404 as *"We could not find an account for that email address."*
    A missing route would tell a pilgrim their account does not exist.
-2. **Never return `409` under `/auth`** except a duplicate registration. Any 409 renders as
+2. **A `404` on `/auth/forgot-password` is shown to the pilgrim as success** (BACKEND_SPEC.md
+   §3.6): a misrouted endpoint tells them a code is on its way when none was sent.
+3. **Never return `409` under `/auth`** except a duplicate registration. Any 409 renders as
    *"That email already has an account."*
-3. **`POST /auth/refresh` returning `401`/`403` with a JSON body is the only response in the
-   entire API that logs a pilgrim out.** Never send it for rate limiting, load, deploys,
-   validation errors, or an unexpected exception. Under load answer `429` or `503`.
-4. **Never `429` on `/auth/login`.** The client's 429 copy reads *"wait, then ask for a new
-   code"* — written for the OTP screen, nonsense on a sign-in form.
+4. **`POST /auth/refresh` returning `401` or `403` is the only response in the entire API that
+   logs a pilgrim out — and a `Content-Type: application/json` header alone arms it, even with
+   no body** (BACKEND_SPEC.md §3.5, §4). Never send it for rate limiting, load, deploys,
+   validation errors, or an unexpected exception. Anything transient on that route is `429` or
+   `503`.
+5. **Never `429` on `/auth/login` or `/auth/register`** (BACKEND_SPEC.md §3.3, §3.4). The
+   client's 429 copy reads *"wait, then ask for a new code"* — written for the OTP screen,
+   nonsense on a sign-in or sign-up form.
+6. **Never `401` or `403` from register, forgot-password, verify-otp or reset-password**
+   (BACKEND_SPEC.md §3.2) — not from router-wide middleware, not for a missing API key. On all
+   four the client shows *"That email and password do not match"*, on screens where no password
+   was typed.
 
 Guard these in error middleware, not by remembering. Mongoose's E11000 (duplicate key) must not
 map to 409 except for duplicate email on register. Mongoose's CastError (malformed ObjectId) must
@@ -133,10 +153,11 @@ of the auth feature — see Layer B.
 ### Refresh rotation
 
 Rotate, and keep the old token working for a **60-second grace window** returning the current
-pair. Two uncoordinated client callers exist (a background refresher every ~6h, and the 401
-interceptor). **PRS §4's "reuse detection revokes the whole device family" without a grace
-window will sign pilgrims out at random.** If you would rather not rotate at all, that is
-simpler and safe — just echo the same `refreshToken` back. The field is required either way.
+pair. Two uncoordinated client callers exist (a background refresher that runs at launch and on
+every resume, at most once per six hours, and the 401 interceptor — BACKEND_SPEC.md §3.5).
+**PRS §4's "reuse detection revokes the whole device family" without a grace window will sign
+pilgrims out at random.** If you would rather not rotate at all, that is simpler and safe — just
+echo the same `refreshToken` back. The field is required either way.
 
 ### The client never asks whether its session is valid
 
@@ -167,30 +188,55 @@ hint claim** — there is no server-side entitlement gate (see A5).
 - `lib/payments/{apple,google,stripe,tap}.ts` is superseded by RevenueCat. Delete it.
 
 The server keeps a record only so support can answer *"did this person pay"* and so a refund
-has somewhere to land.
+has somewhere to land. **Support must be able to look a purchase up by email**, not by UUID —
+join the entitlement record to the user by our `user.id` and search on the user's email
+(BACKEND_SPEC.md §6b rule 9).
 
 ### `POST /webhooks/revenuecat`
 
-- **Auth:** constant-time compare of the `Authorization` header against `RC_WEBHOOK_SECRET`.
-  No signature scheme exists; the shared secret is the whole of it. Never log it.
+- **Auth:** BACKEND_SPEC.md §6b describes two mechanisms; **HMAC signing is the preferred one.**
+  RevenueCat sends `X-RevenueCat-Webhook-Signature: t=<ts>,v1=<hex>`, an HMAC-SHA256 computed
+  over the string `"<t>.<raw body>"` with the integration's signing secret. Verify it over the
+  **raw request bytes, before any JSON parsing** (re-serialising a parsed body changes the bytes
+  and fails every valid request), compare in constant time, and reject a timestamp more than
+  5 minutes away. The fixed `Authorization` shared secret (`RC_WEBHOOK_SECRET`) is the fallback
+  mechanism, also compared in constant time. Never log either secret.
 - **Idempotency is required.** `event.id` is the primary key with a unique constraint. Drop
-  duplicates before any work — RevenueCat retries for ~72 hours, so duplicate delivery is
-  normal operation.
-- **Answer fast:** persist the raw event, return `200`, process on BullMQ.
+  duplicates before any work — RevenueCat retries a failed delivery **5 times, at 5, 10, 20, 40
+  and 80 minutes — under three hours in total** (§6b), so duplicate delivery is normal operation
+  and durable storage on first delivery matters.
+- **Answer fast:** persist the raw event and return **exactly `200`** (not any 2xx) as soon as
+  it is durably stored, within 60 seconds; process off the HTTP path.
 - Event handling:
 
 | Type | Action |
 |---|---|
-| `INITIAL_PURCHASE`, `NON_RENEWING_PURCHASE` | Grant entitlement to `app_user_id` |
-| `TRANSFER` | Move it, reading `transferred_from` / `transferred_to` |
-| `CANCELLATION` + `cancel_reason: CUSTOMER_SUPPORT` | Revoke. **The only revoking event** |
+| `INITIAL_PURCHASE`, `NON_RENEWING_PURCHASE` | Grant entitlement to the user resolved from `app_user_id` or any id in `aliases` |
+| `TRANSFER` | Move it. `transferred_from` / `transferred_to` are **arrays** of App User IDs, not scalars |
+| `CANCELLATION` + `cancel_reason: "CUSTOMER_SUPPORT"` | Revoke. **The only revoking event.** `CANCELLATION` with any other reason is ignored |
+| `REFUND_REVERSED` | Re-grant the entitlement |
+| `TEST` | Return `200`, store nothing |
+| `TEMPORARY_ENTITLEMENT_GRANT` | Log only. No money moved — not a purchase |
 | `EXPIRATION` | Log loudly, alert, **change nothing** — should never arrive |
 | `SUBSCRIPTION_*`, `BILLING_ISSUE`, `PRODUCT_CHANGE` | Ignore |
+| Any unrecognised type | Store it and answer `200`. **Never an error** |
 
-- `app_user_id` is our own `user.id`. If one arrives matching `^\$RCAnonymousID:` that is a
-  client bug — alert, do not create a user.
+- `app_user_id` is usually our own `user.id`, but not always — see the reversal below.
+  **Store anonymous-id events, never drop them.** Match on **any** id in `aliases`, not on
+  `app_user_id` alone; keep an alias → account mapping, and reconcile a stored event when a later
+  event links its alias to an account. **No `TRANSFER` fires for aliasing** — do not wait for one.
+- Key entitlement on `entitlement_ids` containing the configured entitlement id (default
+  `hajjcare_pass`, read from config, never hardcoded). **Never key on `product_id`** — the store
+  SKU has not been chosen yet (§6b rule 3).
 - `expiration_at_ms` is always null. Do not read it, persist it as an expiry, or sweep it.
-- Never grant on `environment: "SANDBOX"` in production.
+- Never grant on `environment: "SANDBOX"` in production. Store it, ignore it for entitlement.
+
+> **REVERSAL (2026-09-24) — anonymous RevenueCat ids.** This section used to say an
+> `app_user_id` matching `^\$RCAnonymousID:` was a client bug — alert, do not create a user.
+> BACKEND_SPEC.md §6b rule 2 says otherwise: anonymous-id events are **real, paid purchases**,
+> reachable in normal operation (the client gives up on `Purchases.logIn` after 15 seconds and
+> carries on, and signing out moves the device to a fresh anonymous id). Dropping one loses the
+> record of a payment that happened.
 
 ## A6. Password reset — the four-call flow
 
@@ -244,6 +290,7 @@ password hash so timing does not leak.
 | `/auth/forgot-password` | per-email and per-IP → `429 {"code":"too_many_attempts"}` |
 | `/auth/verify-otp` | the 5-attempt per-OTP lockout above |
 | `/auth/login` | **none.** Adding one needs a new error code + 7 translations |
+| `/auth/register` | **none.** A `429` here shows the OTP wording on the sign-up form (BACKEND_SPEC.md §3.3) |
 | `/auth/refresh` | if limited at all → `429` or `503`. **Never `401`** |
 
 Mount per-route, never on the router, so a future route cannot silently inherit one.
@@ -257,12 +304,13 @@ User                 email (unique, lowercase: true), passwordHash,
                      fullName?, emailVerified (default: true), timestamps
 Token                tokenHash (unique index), user (ObjectId ref),
                      type ('refresh' | 'resetPassword'),
-                     expiresAt, revokedAt?, replacedBy?
-PasswordResetOtp     email (indexed), codeHash, expiresAt, attempts (default: 0),
-                     lockedUntil?, consumedAt?
-RevenueCatEvent      _id (set to event.id directly), type, appUserId,
-                     raw (Mixed), receivedAt
-Entitlement          user (unique), productId, grantedAt, revokedAt?
+                     expiresAt, purgeAt (TTL), revokedAt?, replacedBy?
+PasswordResetOtp     email (indexed), codeHash (NOT unique), expiresAt, purgeAt (TTL),
+                     attempts (default: 0), lockedUntil?, consumedAt?
+RevenueCatEvent      _id (set to event.id directly), type, appUserId, aliases [String],
+                     rawBody (the exact request body string as received), receivedAt
+Entitlement          user (unique), entitlementId (from config, default "hajjcare_pass"),
+                     grantedAt, revokedAt?          — NO expiry field of any kind
 ```
 
 ### Critical Mongoose-specific rules
@@ -289,24 +337,34 @@ The client's parser fails on a bare integer.
    boilerplates map to 404. Under `/auth` that renders as *"We could not find an account for that
    email address."* Map it to 400 instead.
 
-4. **TTL indexes are the cheap win.** Use `expireAfterSeconds` on `PasswordResetOtp.expiresAt` and on
-   expired `Token` documents to remove the need for a cleanup job. TTL deletion is lazy (MongoDB
-   sweeps roughly once a minute), so never rely on it for correctness — always check `expiresAt`
-   in code as well. It is garbage collection, not an expiry mechanism.
+4. **TTL indexes are the cheap win — on `purgeAt`, never on `expiresAt`.** Use
+   `expireAfterSeconds` on a separate `purgeAt` field, set well after `expiresAt`, to remove the
+   need for a cleanup job. A TTL on `expiresAt` itself can delete an expired OTP before
+   verify-otp answers `otp_expired`, and the pilgrim sees "wrong code" instead of "code expired".
+   TTL deletion is lazy (MongoDB sweeps roughly once a minute), so never rely on it for
+   correctness — always check `expiresAt` in code as well. It is garbage collection, not an
+   expiry mechanism. See §A11.
 
 ### Annotations
 
 - **`replacedBy` and `revokedAt` on Token are REQUIRED** for the 60-second rotation grace window.
-  The current `auth.service.js` deletes the old token outright; that is the bug.
+  The current `auth.service.js` deletes the old token outright; that is the bug. The window must
+  be time-bounded from the moment of rotation (§A10 rule l).
 - **PasswordResetOtp is keyed by EMAIL, not user,** so the flow behaves identically for addresses
   with no account.
 - **`RevenueCatEvent._id = event.id` means idempotency comes free** from the primary key; a retry
   is an E11000 we drop.
 - **Entitlement has NO `expiresAt` field. Forbidden.** The pass is lifetime.
-- **Store only hashes:** never a raw refresh token, reset token, or OTP code.
-- **Password hashing:** bcrypt or argon2id, **min 8 characters, no maximum, no composition rules,
-  no truncation.** A server stricter than the client turns an inline rule the pilgrim could have
-  followed into an opaque server error.
+- **Store only hashes:** never a raw refresh token, reset token, or OTP code. OTP codes are
+  HMAC-SHA256 with a server secret (§A11).
+- **Password hashing: argon2id only. Min 8 characters, no maximum, no composition rules, no
+  truncation.** A server stricter than the client turns an inline rule the pilgrim could have
+  followed into an opaque server error. `bcryptjs` is being removed.
+
+> **REVERSAL (2026-09-24) — bcrypt.** This annotation used to say "bcrypt or argon2id".
+> bcrypt/bcryptjs silently truncates passwords at 72 bytes, which violates BACKEND_SPEC.md §3.3
+> (no truncation, no maximum): two long passphrases sharing a 72-byte prefix would both unlock
+> the account. argon2id only.
 
 ## A9. Layer A definition of done
 
@@ -315,7 +373,8 @@ Contract tests (`tests/contract/`) that test the *client's assumptions*, not our
 - No path under `/auth` returns 404 for any input, including unknown routes
 - No path under `/auth` returns 409 except register with a duplicate email
 - `/auth/refresh` returns 401 only for a genuinely dead token; a simulated DB failure → 5xx
-- `/auth/login` never returns 429
+- `/auth/login` and `/auth/register` never return 429
+- register, forgot-password, verify-otp and reset-password never return 401 or 403
 - Every success body is a bare object; a recursive walker asserts camelCase on every key
 - `/auth/me` returns a bare user
 - Every refresh response contains `tokens.refreshToken`, even when not rotating
@@ -325,6 +384,67 @@ Contract tests (`tests/contract/`) that test the *client's assumptions*, not our
 - `verify-otp` returns `invalid_otp` for both an unknown address and a wrong code
 - A reset token cannot be used twice; `reset-password` returns no tokens
 - `logout` with a garbage token returns 204
+
+## A10. Auth contract — implementation rules
+
+Each rule cites the BACKEND_SPEC.md section it comes from.
+
+a. **Bare JSON object at the root of every response.** No envelope. camelCase keys. (§2, §7)
+b. **JSON types are checked.** Booleans are `true`/`false`, numbers are JSON numbers, and `id`,
+   `email`, `accessToken`, `refreshToken` are non-empty strings. A wrong type fails the whole
+   response. (§2, §3.1)
+c. **`user.id`:** key `id`, a non-empty string, stable forever. The toJSON plugin
+   (`src/models/plugins/toJSON.plugin.js`) is load-bearing — it must keep emitting `id` as a
+   string and removing `_id`, `__v` and `passwordHash`. (§3.1, §7)
+d. **Only `POST /auth/refresh` answering 401/403 can sign a pilgrim out**; a JSON content type
+   alone arms it. (§3.5, §4)
+e. **401, never 403, for an expired access token.** (§3.2)
+f. **Never 404 under the auth router** — not even for an unknown path. Unknown auth paths
+   return `503 {"code":"unavailable"}`. (§3.2, §3.6)
+g. **Never 409 under `/auth`** except duplicate registration (`email_taken`). (§3.2)
+h. **Never 401/403 from register, forgot-password, verify-otp, reset-password.** (§3.2)
+i. **Never 429 from login or register.** (§3.3, §3.4)
+j. **Unexpected errors → `503 {"code":"unavailable"}`**, never 500 and never 401. (§3.2)
+k. **Password:** min 8 by JS `.length` (same as Dart's `String.length`), no composition rules,
+   no maximum, never trimmed, never truncated. **Email** trimmed and lowercased server-side.
+   (§3.3, §8)
+l. **Refresh token ≥ 45 days (60 used), rotated, with a 60-second grace window measured from
+   the rotation time.** Inside the window the previous token returns a fresh pair and the first
+   successor stays valid; after it the previous token is dead. The window must be time-bounded.
+   (§4)
+m. **forgot-password:** identical 200 body, status and comparable timing for known and unknown
+   addresses; never awaits email delivery. (§3.6, §6)
+n. **verify-otp order:** lockout (`429`) → expired (`400 otp_expired`, no attempt consumed) →
+   wrong (`400 invalid_otp`). Unknown address = `invalid_otp`. Returns a reset token only,
+   never a session. A resend voids the old code and resets attempts. 6 digits, 600s, 60s
+   resend, 5 attempts. (§3.7, §5, §6)
+o. **reset-password:** single-use token, `204`, no tokens returned. (§3.8)
+p. **logout:** always `204`, including `{"refreshToken":""}` and unknown tokens. (§3.9)
+q. **`/auth/me`** returns a bare AuthUser, not `{user}`, with no journey, entitlement or
+   profile data. (§3.10)
+r. **No entitlement endpoint, no health-data endpoint, no profile endpoint.** (§1)
+s. **Routes are mounted under `API_PREFIX=/api/v1`.** The base URL given to the Flutter
+   developer is `https://<host>/api/v1` — any prefix works as long as the base URL carries it.
+   (§2, §8 item 2)
+t. **The OTP email is English-only** until the app sends a locale. (§8 item 17)
+
+## A11. Mongo-specific rules
+
+- **Duplicate email:** catch Mongo error code `11000` → `409 email_taken`. Never
+  check-then-insert.
+- **Multi-document writes** (token rotation, password reset) run in a transaction; this is why
+  the replica set is required.
+- **TTL indexes purge on a separate `purgeAt` field** set well after `expiresAt`, never on
+  `expiresAt` itself — otherwise an expired OTP is deleted before verify-otp can answer
+  `otp_expired`, and the pilgrim sees "wrong code" instead of "code expired".
+- **An OTP `codeHash` is never a unique index:** there are only 10^6 codes, so two pilgrims will
+  eventually get the same one.
+- **OTP codes are stored as HMAC-SHA256 with a server secret**, not plain sha256: a plain hash
+  of a 6-digit code is reversed instantly from a database leak.
+- **Atomic state changes use `findOneAndUpdate` with the precondition in the filter** (e.g.
+  `{ revokedAt: null }`), never read-then-write.
+- **Password hashing lives in a service, never in a pre-save hook** (hooks double-hash on
+  updates).
 
 ---
 
@@ -374,7 +494,7 @@ what an SOS does when the API is unreachable.
 | §4 phone-first OTP | Client ships email + password. Switching is a full auth rewrite on the client |
 | §5 season-scoped pass, `Season` model, `expires_at`, `entitlementExpiry.job` | Pass is lifetime. Expiry is explicitly forbidden |
 | §5.1/§5.3 Apple/Google/Stripe/Tap verification, `lib/payments/*` | RevenueCat handles this; one webhook replaces all of it |
-| §2 response envelope, SCREAMING_SNAKE codes, `/api/v1` | Breaks the shipped client (see A2, A3) |
+| §2 response envelope, SCREAMING_SNAKE codes | Breaks the shipped client (see A2, A3). The `/api/v1` prefix is no longer superseded — see the A2 reversal |
 | §12 `GET /privacy/export`, `DELETE /privacy/account` | Still legally required — but scope depends on B1. Revisit with B1 |
 
 ## B4. Still open (from PRS §17, unchanged)
@@ -417,13 +537,15 @@ Framework    Express 4 (thin) — logic in services, not routes
 DB           MongoDB + Mongoose 8, running as a single-node replica set
 Cache/Queue  Redis 7 + BullMQ
 Validation   Joi (already wired via the validate middleware)
-Logging      Winston/Pino as the boilerplate ships, with the redaction list in §C3
-Testing      Jest + Supertest + mongodb-memory-server
+Logging      winston (with a redaction format) + morgan (request line only, never bodies)
+Testing      Jest + Supertest + mongodb-memory-server; suites that need transactions use
+             MongoMemoryReplSet (tests/utils/setupTestDB.js)
 ```
 
 **Stack decision made 2026-08-30:** This supersedes the prior TypeScript + PostgreSQL + Prisma
 specification. The decision was deliberate — the boilerplate is production-grade JavaScript on
 Mongoose, and nothing in Layer A's contract depends on the language or ORM choice (see BACKEND_SPEC.md §2).
+Never introduce TypeScript, Prisma, PostgreSQL, Zod, Pino or Vitest.
 
 Redis/BullMQ is justified in Layer A for exactly two things: enqueuing the reset email so
 `forgot-password` never awaits SMTP, and processing RevenueCat events off the HTTP path.
@@ -434,21 +556,23 @@ Socket.IO is not justified yet (B2).
 ```
 routes/        HTTP only: parse, validate, call service, shape response. No DB, no rules.
 services/      All business logic. Takes a ctx. Throws ApiError.
-repositories/  Prisma access, one file per aggregate. No business rules.
+models/        Mongoose schemas and indexes (src/models/), accessed from services. No business rules.
 jobs/          BullMQ processors. Thin wrappers over services.
 lib/           Crypto, tokens, mail.
 ```
 
-A route handler longer than ~15 lines is a smell. Write the Zod schema first and derive types
-from it. Add a migration for every schema change; never edit an applied migration.
+A route handler longer than ~15 lines is a smell. Joi validates config. Auth request validation
+is explicit and maps to the contract's specific error codes (`password_too_short`,
+`email_invalid`, …) — never a generic `400 invalid_input` for auth routes. There are no
+migrations: schema changes are Mongoose schemas and indexes.
 
 ## C3. Security
 
-- **Pino redaction:** `req.headers.authorization`, `req.body.password`, `req.body.code`,
-  `req.body.refreshToken`, `req.body.resetToken`, `*.email`, `*.purchaseToken`.
-  Never log the RevenueCat shared secret.
-- Secrets only via env, validated at boot by `config/env.ts` (Zod). **Boot must fail loudly on
-  a missing secret** rather than starting with a silent default.
+- **winston redaction:** `req.headers.authorization`, `req.body.password`, `req.body.code`,
+  `req.body.refreshToken`, `req.body.resetToken`, `*.email`, `*.purchaseToken`. morgan logs the
+  request line only, never bodies. Never log the RevenueCat shared secret or signing secret.
+- Secrets only via env, validated at boot by `src/config/config.js` (Joi, fails fast). **Boot
+  must fail loudly on a missing secret** rather than starting with a silent default.
 - TLS everywhere. No identifiers in URLs for shared resources.
 - OTP codes, refresh tokens and reset tokens are stored as hashes, never raw.
 
@@ -472,16 +596,22 @@ from it. Add a migration for every schema change; never edit an applied migratio
 
 ## C5. Environment variables (Layer A only)
 
+Names as declared in `src/config/config.js`:
+
 ```bash
-NODE_ENV=            PORT=            API_BASE_URL=
-DATABASE_URL=        REDIS_URL=
-JWT_ACCESS_SECRET=   JWT_ACCESS_TTL=15m
-REFRESH_TTL_DAYS=60             # firm floor 45 — see A4
+NODE_ENV=            PORT=            API_PREFIX=/api/v1
+MONGODB_URL=         MONGODB_REPLICA_SET=rs0         MONGODB_AUTO_INDEX=
+JWT_ACCESS_SECRET=   JWT_ACCESS_EXPIRATION_MINUTES=15
+JWT_REFRESH_EXPIRATION_DAYS=60                        # firm floor 45 — see A4
+JWT_RESET_PASSWORD_EXPIRATION_MINUTES=10
 RC_WEBHOOK_SECRET=              # RevenueCat shared secret, long and random, never logged
-SMTP_URL=            MAIL_FROM=
-SENTRY_DSN=          LOG_LEVEL=info
+CORS_ORIGINS=        TRUST_PROXY=     BODY_LIMIT=
+SMTP_URL=            MAIL_FROM=       LOG_LEVEL=info
 ```
 
+Refresh tokens are opaque random strings stored as hashes, **not JWTs** — no refresh-token
+signing secret is needed.
+
 The PRS list of Apple / Google / Stripe / Tap / FCM / WhatsApp / weather / S3 /
-`FIELD_ENCRYPTION_KEY` variables belongs to Layer B. Do not add them to `config/env.ts` until
-the matching decision lands — a required-but-unused secret means the service will not boot.
+`FIELD_ENCRYPTION_KEY` variables belongs to Layer B. Do not add them to `src/config/config.js`
+until the matching decision lands — a required-but-unused secret means the service will not boot.
