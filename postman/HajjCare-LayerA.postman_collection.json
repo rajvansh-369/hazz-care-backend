@@ -2,354 +2,3193 @@
   "info": {
     "_postman_id": "hajjcare-backend-layer-a",
     "name": "HajjCare Backend API - Layer A",
-    "description": "The eight auth endpoints the Flutter client calls (BACKEND_SPEC.md §3), as implemented.\n\n- `baseUrl` ends in `/api/v1`; paths are appended verbatim.\n- Register and Login store `accessToken` and `refreshToken`; Refresh stores the rotated pair; Verify OTP stores `resetToken`.\n- Set `email` and `password` once; Forgot Password sends a 6-digit code to `email` (the dev server writes it to `.dev-emails/`; docker compose delivers it to Mailpit at http://localhost:8025). Put it in `otpCode`.\n- Only `/auth/me` carries an Authorization header. No other request needs one.\n- `POST /webhooks/revenuecat` is not built yet, so it is not here.",
+    "description": "The eight auth endpoints the Flutter client calls (BACKEND_SPEC.md §3) and the RevenueCat webhook, each with the contract checks from CLAUDE.md §A9.\n\n**Run it:** `docker compose up -d --build`, import this collection and `HajjCare-Environment.postman_environment.json`, select the environment, then Run collection (in order, no delay needed). Every run registers a fresh pilgrim.\n\n- `baseUrl` ends in `/api/v1`; paths are appended verbatim.\n- Reset codes are read from Mailpit (`mailpitUrl`, docker compose only). Against a server that sends real email, leave `mailpitUrl` empty and put the emailed code in `otpCode` by hand; folder 5 needs Mailpit.\n- Only `/auth/me` carries an Authorization header. The webhook sends `rcWebhookSecret` as its Authorization value.\n- Folder 2 relies on the 60-second rotation grace window: run it without pausing.\n- A collection-level test on every API response checks: no 404/403 under /auth, 409 only for email_taken, no 500, bare JSON object with camelCase keys.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Auth - Register",
-      "event": [
+      "name": "0 · Health",
+      "description": "Liveness and readiness probes (not called by the app).",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "if (pm.response.code === 200 || pm.response.code === 201) {",
-              "  const body = pm.response.json();",
-              "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
-              "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"fullName\": \"Aisha Rahman\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Health - live",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 live', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.equal('live');",
+                  "});"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/register",
-          "host": [
-            "{{baseUrl}}"
           ],
-          "path": [
-            "auth",
-            "register"
-          ]
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "response": []
         },
-        "description": "201 { tokens, user }. 409 email_taken; 422 invalid_input with password_too_short / email_invalid. `fullName` key always present; may be null."
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Login",
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "if (pm.response.code === 200 || pm.response.code === 201) {",
-              "  const body = pm.response.json();",
-              "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
-              "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Health - ready",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 ready, MongoDB up', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.equal('ready');",
+                  "  pm.expect(body.dependencies.mongodb).to.equal('up');",
+                  "});"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/login",
-          "host": [
-            "{{baseUrl}}"
           ],
-          "path": [
-            "auth",
-            "login"
-          ]
-        },
-        "description": "200 { tokens, user }. 401 invalid_credentials for a wrong password or an unknown address. Never 429."
-      },
-      "response": []
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
     },
     {
-      "name": "Auth - Refresh",
-      "event": [
+      "name": "1 · Register & sign in",
+      "description": "BACKEND_SPEC.md §3.3, §3.4, §3.10. Register makes a fresh pilgrim on every run.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "if (pm.response.code === 200 || pm.response.code === 201) {",
-              "  const body = pm.response.json();",
-              "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
-              "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Auth - Register",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh pilgrim on every run. The address is sent with capitals and spaces: the server",
+                  "// must trim and lowercase it (CLAUDE.md A10 k).",
+                  "const stamp = Date.now();",
+                  "pm.collectionVariables.set('email', 'pilgrim.' + stamp + '@hajjcare.test');",
+                  "pm.collectionVariables.set('emailAsTyped', '  Pilgrim.' + stamp + '@HajjCare.TEST ');",
+                  "pm.collectionVariables.set('password', 'correct horse battery');",
+                  "pm.collectionVariables.set('newPassword', 'new staple horse battery');",
+                  "['userId', 'accessToken', 'refreshToken', 'resetToken', 'otpCode', 'otpMessageId'].forEach((key) =>",
+                  "  pm.collectionVariables.set(key, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('AuthSession: exactly { tokens, user }', () => pm.expect(body).to.have.all.keys('tokens', 'user'));",
+                  "pm.test('tokens: accessToken and refreshToken strings, expiresIn 900 (seconds)', () => {",
+                  "  pm.expect(body.tokens).to.have.all.keys('accessToken', 'refreshToken', 'expiresIn');",
+                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.refreshToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.expiresIn).to.equal(900);",
+                  "});",
+                  "pm.test('user: exactly { id, email, fullName, emailVerified }', () => {",
+                  "  pm.expect(body.user).to.have.all.keys('id', 'email', 'fullName', 'emailVerified');",
+                  "  pm.expect(body.user.id).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.user.emailVerified).to.equal(true);",
+                  "});",
+                  "pm.test('user: email trimmed and lowercased, fullName kept', () => {",
+                  "  pm.expect(body.user.email).to.equal(pm.collectionVariables.get('email'));",
+                  "  pm.expect(body.user.fullName).to.equal('Aisha Rahman');",
+                  "});",
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('userId', body.user.id);",
+                  "}",
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+                  "}"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/refresh",
-          "host": [
-            "{{baseUrl}}"
           ],
-          "path": [
-            "auth",
-            "refresh"
-          ]
-        },
-        "description": "200 { tokens } (rotated; the previous token keeps working for 60s). 401 session_revoked only for a dead token — this signs the pilgrim out in the app. No Authorization header."
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Forgot Password",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailAsTyped}}\",\n  \"password\": \"{{password}}\",\n  \"fullName\": \"Aisha Rahman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "201 { tokens, user }. Stores userId, accessToken and refreshToken."
           },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"{{email}}\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
+          "response": []
         },
-        "url": {
-          "raw": "{{baseUrl}}/auth/forgot-password",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "auth",
-            "forgot-password"
-          ]
-        },
-        "description": "200 { expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 } for every valid address, registered or not. 429 too_many_attempts after 5 sends per address per hour."
-      },
-      "response": []
-    },
-    {
-      "name": "Auth - Verify OTP",
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "if (pm.response.code === 200) {",
-              "  pm.collectionVariables.set('resetToken', pm.response.json().resetToken);",
-              "}"
-            ]
-          }
+          "name": "Register - duplicate email → 409 email_taken",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 email_taken', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.equal('email_taken');",
+                  "});",
+                  "pm.test('errors[] carries email:email_taken', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('email:email_taken');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"fullName\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The only 409 the API may ever send."
+          },
+          "response": []
+        },
+        {
+          "name": "Register - 7-char password → 422 password_too_short",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 invalid_input', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});",
+                  "pm.test('errors[] carries password:password_too_short', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('password:password_too_short');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"short.{{$timestamp}}@hajjcare.test\",\n  \"password\": \"seven77\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register - bad email → 422 email_invalid",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 invalid_input', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});",
+                  "pm.test('errors[] carries email:email_invalid', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('email:email_invalid');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"not-an-email\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Auth - Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('AuthSession: exactly { tokens, user }', () => pm.expect(body).to.have.all.keys('tokens', 'user'));",
+                  "pm.test('tokens: accessToken and refreshToken strings, expiresIn 900 (seconds)', () => {",
+                  "  pm.expect(body.tokens).to.have.all.keys('accessToken', 'refreshToken', 'expiresIn');",
+                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.refreshToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.expiresIn).to.equal(900);",
+                  "});",
+                  "pm.test('user: exactly { id, email, fullName, emailVerified }', () => {",
+                  "  pm.expect(body.user).to.have.all.keys('id', 'email', 'fullName', 'emailVerified');",
+                  "  pm.expect(body.user.id).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.user.emailVerified).to.equal(true);",
+                  "});",
+                  "pm.test('user.id identical to register', () => pm.expect(body.user.id).to.equal(pm.collectionVariables.get('userId')));",
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "200 { tokens, user }. Never 429."
+          },
+          "response": []
+        },
+        {
+          "name": "Login - wrong password → 401 invalid_credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 invalid_credentials', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_credentials');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"not the password\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login - unknown email → 401 invalid_credentials (never 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 invalid_credentials', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_credentials');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody.{{$timestamp}}@hajjcare.test\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Auth - Me",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('bare AuthUser (not { user }), nothing else', () =>",
+                  "  pm.expect(body).to.have.all.keys('id', 'email', 'fullName', 'emailVerified'));",
+                  "pm.test('id identical to register', () => pm.expect(body.id).to.equal(pm.collectionVariables.get('userId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "The only endpoint with an Authorization header."
+          },
+          "response": []
+        },
+        {
+          "name": "Me - no token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 unauthorized', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('unauthorized');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Me - garbage token → 401 (never 403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 unauthorized', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('unauthorized');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer not.a.jwt"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          },
+          "response": []
         }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/verify-otp",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "auth",
-            "verify-otp"
-          ]
-        },
-        "description": "200 { resetToken, expiresInSeconds: 600 } — never a session. 400 invalid_otp (wrong code or unknown address), 400 otp_expired, 429 too_many_attempts after 5 wrong codes."
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Auth - Reset Password",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"password\": \"{{password}}\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+      "name": "2 · Refresh (rotation, 60s grace)",
+      "description": "BACKEND_SPEC.md §3.5, §4. A 401/403 here is the only response that signs a pilgrim out. Run this folder within 60 seconds of its first request.",
+      "item": [
+        {
+          "name": "Auth - Refresh",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('previousRefreshToken', pm.collectionVariables.get('refreshToken'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('{ tokens } with a rotated refreshToken, expiresIn 900', () => {",
+                  "  pm.expect(body).to.have.property('tokens');",
+                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.refreshToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.refreshToken).to.not.equal(pm.collectionVariables.get('previousRefreshToken'));",
+                  "  pm.expect(body.tokens.expiresIn).to.equal(900);",
+                  "});",
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+                  "}"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/reset-password",
-          "host": [
-            "{{baseUrl}}"
           ],
-          "path": [
-            "auth",
-            "reset-password"
-          ]
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "No Authorization header. Stores the rotated pair; the previous token keeps working for 60 seconds."
+          },
+          "response": []
         },
-        "description": "204, no body, no tokens — sign in again with the new password. 400 invalid_reset_token (invalid, expired or already used), 422 password_too_short."
-      },
-      "response": []
+        {
+          "name": "Refresh - previous token inside grace → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with tokens (a second caller racing the rotation is not signed out)', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().tokens.refreshToken).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{previousRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh - successor still valid → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh - unknown token → 401 session_revoked",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 session_revoked', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('session_revoked');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"this-token-was-never-issued\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh - missing token → 400 (not a sign-out)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_input', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Me - refreshed access token, same user.id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200, id unchanged', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().id).to.equal(pm.collectionVariables.get('userId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
     },
     {
-      "name": "Auth - Logout",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Accept",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+      "name": "3 · Status-code landmines",
+      "description": "CLAUDE.md A3: no 404 and no stray 401/409 under /auth.",
+      "item": [
+        {
+          "name": "Unknown /auth path → 503 (never 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('503 unavailable', () => {",
+                  "  pm.response.to.have.status(503);",
+                  "  pm.expect(pm.response.json().code).to.equal('unavailable');",
+                  "});"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/logout",
-          "host": [
-            "{{baseUrl}}"
           ],
-          "path": [
-            "auth",
-            "logout"
-          ]
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/does-not-exist",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "does-not-exist"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         },
-        "description": "Always 204, including an unknown, revoked or empty (\"\") token. Revokes this one device's refresh token."
-      },
-      "response": []
+        {
+          "name": "Wrong method on /auth/login → 503 (never 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('503 unavailable', () => {",
+                  "  pm.response.to.have.status(503);",
+                  "  pm.expect(pm.response.json().code).to.equal('unavailable');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Malformed JSON on register → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_input', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"broken",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
     },
     {
-      "name": "Auth - Me",
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Accept",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{accessToken}}"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/auth/me",
-          "host": [
-            "{{baseUrl}}"
+      "name": "4 · Password reset (OTP via Mailpit)",
+      "description": "BACKEND_SPEC.md §3.6–§3.8. forgot-password → read the code from Mailpit → verify-otp → reset-password → sign in with the new password.",
+      "item": [
+        {
+          "name": "Auth - Forgot Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with exactly { expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 }', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({ expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 });",
+                  "});",
+                  "pm.collectionVariables.set('forgotPasswordBody', pm.response.text());"
+                ]
+              }
+            }
           ],
-          "path": [
-            "auth",
-            "me"
-          ]
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "200 { expiresInSeconds, resendAfterSeconds, codeLength } for every valid address. Sends the code by email."
+          },
+          "response": []
         },
-        "description": "200 with a bare AuthUser { id, email, fullName, emailVerified }. 401 for a missing, invalid or expired access token."
-      },
-      "response": []
+        {
+          "name": "Forgot Password - unknown address → identical 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with exactly { expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 }', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({ expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 });",
+                  "});",
+                  "pm.test('byte-identical to the registered address (no enumeration)', () =>",
+                  "  pm.expect(pm.response.text()).to.equal(pm.collectionVariables.get('forgotPasswordBody')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody.{{$timestamp}}@hajjcare.test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Forgot Password - bad email → 422 email_invalid",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 invalid_input', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});",
+                  "pm.test('errors[] carries email:email_invalid', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('email:email_invalid');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"not-an-email\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mailpit - read reset code",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const mailpit = pm.variables.get('mailpitUrl');",
+                  "const to = pm.collectionVariables.get('email').toLowerCase();",
+                  "const lastRead = pm.collectionVariables.get('otpMessageId');",
+                  "const deadline = Date.now() + 10000;",
+                  "const poll = () => {",
+                  "  pm.sendRequest(mailpit + '/api/v1/search?limit=20&query=' + encodeURIComponent('to:\"' + to + '\"'), (err, res) => {",
+                  "    const messages = !err && res.code === 200 ? res.json().messages || [] : [];",
+                  "    const newest = messages",
+                  "      .filter((m) => (m.To || []).some((r) => String(r.Address).toLowerCase() === to))",
+                  "      .sort((a, b) => Date.parse(b.Created) - Date.parse(a.Created))[0];",
+                  "    if (newest && (newest.ID !== lastRead || Date.now() >= deadline)) {",
+                  "      pm.collectionVariables.set('otpMessageId', newest.ID);",
+                  "    } else if (Date.now() < deadline) {",
+                  "      setTimeout(poll, 500);",
+                  "    } else {",
+                  "      pm.collectionVariables.set('otpMessageId', 'no-email-arrived');",
+                  "    }",
+                  "  });",
+                  "};",
+                  "if (mailpit) {",
+                  "  poll();",
+                  "} else {",
+                  "  console.warn('mailpitUrl is empty: paste the emailed code into the otpCode variable by hand.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('reset email found in Mailpit', () => pm.response.to.have.status(200));",
+                  "const message = pm.response.json();",
+                  "pm.test('subject is the English reset-code subject', () =>",
+                  "  pm.expect(message.Subject).to.equal('Your HajjCare password reset code'));",
+                  "const match = /^\\s*(\\d{6})\\s*$/m.exec(message.Text || '');",
+                  "pm.test('plain-text body carries a six-digit code', () => pm.expect(match, 'six-digit code').to.not.equal(null));",
+                  "if (match) {",
+                  "  pm.collectionVariables.set('otpCode', match[1]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mailpitUrl}}/api/v1/message/{{otpMessageId}}",
+              "host": [
+                "{{mailpitUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "message",
+                "{{otpMessageId}}"
+              ]
+            },
+            "description": "Not a HajjCare endpoint: reads the reset email the API just sent through SMTP to Mailpit (docker compose), and stores the six-digit code in `otpCode`. Against a real mail server leave `mailpitUrl` empty and set `otpCode` by hand."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - wrong code → 400 invalid_otp",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const code = pm.collectionVariables.get('otpCode');",
+                  "pm.collectionVariables.set('wrongOtpCode', code === '000000' ? '111111' : '000000');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_otp', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_otp');",
+                  "});",
+                  "pm.test('errors[] carries code:invalid_otp', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('code:invalid_otp');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{wrongOtpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - unknown address → 400 invalid_otp",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_otp', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_otp');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody.{{$timestamp}}@hajjcare.test\",\n  \"code\": \"{{otpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Exactly like a wrong code: never 404, never account_not_found."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - malformed code → 400 invalid_otp",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_otp', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_otp');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"12ab\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Auth - Verify OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with exactly { resetToken, expiresInSeconds: 600 } — never a session', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.all.keys('resetToken', 'expiresInSeconds');",
+                  "  pm.expect(body.resetToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.expiresInSeconds).to.equal(600);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  pm.collectionVariables.set('resetToken', pm.response.json().resetToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Stores resetToken."
+          },
+          "response": []
+        },
+        {
+          "name": "Me - reset token is not a session → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 unauthorized', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('unauthorized');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{resetToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Password - 5-char password → 422 password_too_short",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 invalid_input', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});",
+                  "pm.test('errors[] carries password:password_too_short', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('password:password_too_short');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"password\": \"short\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Auth - Reset Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content, empty body', () => {",
+                  "  pm.response.to.have.status(204);",
+                  "  pm.expect(pm.response.text()).to.equal('');",
+                  "});",
+                  "if (pm.response.code === 204) {",
+                  "  pm.collectionVariables.set('oldPassword', pm.collectionVariables.get('password'));",
+                  "  pm.collectionVariables.set('password', pm.collectionVariables.get('newPassword'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "204, no body, no tokens. Revokes every refresh token of the account."
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Password - token reused → 400 invalid_reset_token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_reset_token', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_reset_token');",
+                  "});",
+                  "pm.test('errors[] carries resetToken:invalid_reset_token', () => {",
+                  "  const errors = pm.response.json().errors || [];",
+                  "  pm.expect(errors.map((e) => e.field + ':' + e.code)).to.include('resetToken:invalid_reset_token');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh - session from before reset → 401 session_revoked",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 session_revoked', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('session_revoked');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login - old password → 401 invalid_credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 invalid_credentials', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_credentials');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{oldPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login - new password → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('AuthSession: exactly { tokens, user }', () => pm.expect(body).to.have.all.keys('tokens', 'user'));",
+                  "pm.test('tokens: accessToken and refreshToken strings, expiresIn 900 (seconds)', () => {",
+                  "  pm.expect(body.tokens).to.have.all.keys('accessToken', 'refreshToken', 'expiresIn');",
+                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.refreshToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.expiresIn).to.equal(900);",
+                  "});",
+                  "pm.test('user: exactly { id, email, fullName, emailVerified }', () => {",
+                  "  pm.expect(body.user).to.have.all.keys('id', 'email', 'fullName', 'emailVerified');",
+                  "  pm.expect(body.user.id).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.user.emailVerified).to.equal(true);",
+                  "});",
+                  "pm.test('user.id unchanged by the reset', () => pm.expect(body.user.id).to.equal(pm.collectionVariables.get('userId')));",
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', body.tokens.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', body.tokens.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5 · OTP lockout and resend",
+      "description": "CLAUDE.md A6: five attempts, lockout checked before the code, and a resend voids the old code and lifts the lockout.",
+      "item": [
+        {
+          "name": "Forgot Password - new code",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with exactly { expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 }', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({ expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mailpit - read new code",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const mailpit = pm.variables.get('mailpitUrl');",
+                  "const to = pm.collectionVariables.get('email').toLowerCase();",
+                  "const lastRead = pm.collectionVariables.get('otpMessageId');",
+                  "const deadline = Date.now() + 10000;",
+                  "const poll = () => {",
+                  "  pm.sendRequest(mailpit + '/api/v1/search?limit=20&query=' + encodeURIComponent('to:\"' + to + '\"'), (err, res) => {",
+                  "    const messages = !err && res.code === 200 ? res.json().messages || [] : [];",
+                  "    const newest = messages",
+                  "      .filter((m) => (m.To || []).some((r) => String(r.Address).toLowerCase() === to))",
+                  "      .sort((a, b) => Date.parse(b.Created) - Date.parse(a.Created))[0];",
+                  "    if (newest && (newest.ID !== lastRead || Date.now() >= deadline)) {",
+                  "      pm.collectionVariables.set('otpMessageId', newest.ID);",
+                  "    } else if (Date.now() < deadline) {",
+                  "      setTimeout(poll, 500);",
+                  "    } else {",
+                  "      pm.collectionVariables.set('otpMessageId', 'no-email-arrived');",
+                  "    }",
+                  "  });",
+                  "};",
+                  "if (mailpit) {",
+                  "  poll();",
+                  "} else {",
+                  "  console.warn('mailpitUrl is empty: paste the emailed code into the otpCode variable by hand.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('reset email found in Mailpit', () => pm.response.to.have.status(200));",
+                  "const message = pm.response.json();",
+                  "pm.test('subject is the English reset-code subject', () =>",
+                  "  pm.expect(message.Subject).to.equal('Your HajjCare password reset code'));",
+                  "const match = /^\\s*(\\d{6})\\s*$/m.exec(message.Text || '');",
+                  "pm.test('plain-text body carries a six-digit code', () => pm.expect(match, 'six-digit code').to.not.equal(null));",
+                  "if (match) {",
+                  "  pm.collectionVariables.set('otpCode', match[1]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mailpitUrl}}/api/v1/message/{{otpMessageId}}",
+              "host": [
+                "{{mailpitUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "message",
+                "{{otpMessageId}}"
+              ]
+            },
+            "description": "Not a HajjCare endpoint: reads the reset email the API just sent through SMTP to Mailpit (docker compose), and stores the six-digit code in `otpCode`. Against a real mail server leave `mailpitUrl` empty and set `otpCode` by hand."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - 5th wrong code → 400 (4 sent first)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const code = pm.collectionVariables.get('otpCode');",
+                  "pm.collectionVariables.set('wrongOtpCode', code === '000000' ? '111111' : '000000');",
+                  "// Wrong attempts 1-4; this request is the fifth.",
+                  "const base = pm.variables.get('baseUrl');",
+                  "const payload = JSON.stringify({ email: pm.collectionVariables.get('email'), code: pm.collectionVariables.get('wrongOtpCode') });",
+                  "const results = [];",
+                  "const attempt = () => {",
+                  "  if (results.length === 4) {",
+                  "    pm.collectionVariables.set('lockoutWarmup', JSON.stringify(results));",
+                  "    return;",
+                  "  }",
+                  "  pm.sendRequest({",
+                  "    url: base + '/auth/verify-otp',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: payload },",
+                  "  }, (err, res) => {",
+                  "    results.push(err ? 'error' : res.code + ' ' + res.json().code);",
+                  "    attempt();",
+                  "  });",
+                  "};",
+                  "attempt();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wrong attempts 1-4 were each 400 invalid_otp', () =>",
+                  "  pm.expect(JSON.parse(pm.collectionVariables.get('lockoutWarmup'))).to.deep.equal(Array(4).fill('400 invalid_otp')));",
+                  "",
+                  "pm.test('400 invalid_otp', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_otp');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{wrongOtpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - right code while locked → 429",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('429 too_many_attempts', () => {",
+                  "  pm.response.to.have.status(429);",
+                  "  pm.expect(pm.response.json().code).to.equal('too_many_attempts');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The lockout is checked before the code, so even the right code waits."
+          },
+          "response": []
+        },
+        {
+          "name": "Forgot Password - resend → fresh 600/60/6",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('oldOtpCode', pm.collectionVariables.get('otpCode'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with exactly { expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 }', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({ expiresInSeconds: 600, resendAfterSeconds: 60, codeLength: 6 });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mailpit - read resent code",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const mailpit = pm.variables.get('mailpitUrl');",
+                  "const to = pm.collectionVariables.get('email').toLowerCase();",
+                  "const lastRead = pm.collectionVariables.get('otpMessageId');",
+                  "const deadline = Date.now() + 10000;",
+                  "const poll = () => {",
+                  "  pm.sendRequest(mailpit + '/api/v1/search?limit=20&query=' + encodeURIComponent('to:\"' + to + '\"'), (err, res) => {",
+                  "    const messages = !err && res.code === 200 ? res.json().messages || [] : [];",
+                  "    const newest = messages",
+                  "      .filter((m) => (m.To || []).some((r) => String(r.Address).toLowerCase() === to))",
+                  "      .sort((a, b) => Date.parse(b.Created) - Date.parse(a.Created))[0];",
+                  "    if (newest && (newest.ID !== lastRead || Date.now() >= deadline)) {",
+                  "      pm.collectionVariables.set('otpMessageId', newest.ID);",
+                  "    } else if (Date.now() < deadline) {",
+                  "      setTimeout(poll, 500);",
+                  "    } else {",
+                  "      pm.collectionVariables.set('otpMessageId', 'no-email-arrived');",
+                  "    }",
+                  "  });",
+                  "};",
+                  "if (mailpit) {",
+                  "  poll();",
+                  "} else {",
+                  "  console.warn('mailpitUrl is empty: paste the emailed code into the otpCode variable by hand.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('reset email found in Mailpit', () => pm.response.to.have.status(200));",
+                  "const message = pm.response.json();",
+                  "pm.test('subject is the English reset-code subject', () =>",
+                  "  pm.expect(message.Subject).to.equal('Your HajjCare password reset code'));",
+                  "const match = /^\\s*(\\d{6})\\s*$/m.exec(message.Text || '');",
+                  "pm.test('plain-text body carries a six-digit code', () => pm.expect(match, 'six-digit code').to.not.equal(null));",
+                  "if (match) {",
+                  "  pm.collectionVariables.set('otpCode', match[1]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mailpitUrl}}/api/v1/message/{{otpMessageId}}",
+              "host": [
+                "{{mailpitUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "message",
+                "{{otpMessageId}}"
+              ]
+            },
+            "description": "Not a HajjCare endpoint: reads the reset email the API just sent through SMTP to Mailpit (docker compose), and stores the six-digit code in `otpCode`. Against a real mail server leave `mailpitUrl` empty and set `otpCode` by hand."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - voided old code → 400 invalid_otp",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_otp', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_otp');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{oldOtpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP - resent code → 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 resetToken: the resend lifted the lockout', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().resetToken).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6 · Logout",
+      "description": "BACKEND_SPEC.md §3.9: always 204.",
+      "item": [
+        {
+          "name": "Auth - Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content, empty body', () => {",
+                  "  pm.response.to.have.status(204);",
+                  "  pm.expect(pm.response.text()).to.equal('');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Always 204. Revokes this device's refresh token."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh - after logout → 401 session_revoked",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 session_revoked', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('session_revoked');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logout - unknown token → 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content, empty body', () => {",
+                  "  pm.response.to.have.status(204);",
+                  "  pm.expect(pm.response.text()).to.equal('');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"garbage\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logout - empty token → 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content, empty body', () => {",
+                  "  pm.response.to.have.status(204);",
+                  "  pm.expect(pm.response.text()).to.equal('');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logout - no body → 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content, empty body', () => {",
+                  "  pm.response.to.have.status(204);",
+                  "  pm.expect(pm.response.text()).to.equal('');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7 · RevenueCat webhook",
+      "description": "CLAUDE.md A5. Server-to-server; the app never calls it. `rcWebhookSecret` must equal RC_WEBHOOK_SECRET (sent as the whole Authorization value, no \"Bearer\"). After a run: docker compose exec api npm run find-purchase -- <email>",
+      "item": [
+        {
+          "name": "Webhook - TEST event → 200",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('rcEventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('rcTransactionId', 'local-' + Date.now());",
+                  "pm.collectionVariables.set('rcNowMs', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with an empty JSON object', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{rcWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"{{userId}}\",\n    \"original_app_user_id\": \"{{userId}}\",\n    \"aliases\": [\n      \"{{userId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"SANDBOX\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"TEST\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - no Authorization → 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('rcEventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('rcTransactionId', 'local-' + Date.now());",
+                  "pm.collectionVariables.set('rcNowMs', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 unauthorized', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('unauthorized');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"{{userId}}\",\n    \"original_app_user_id\": \"{{userId}}\",\n    \"aliases\": [\n      \"{{userId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"PRODUCTION\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"INITIAL_PURCHASE\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - wrong secret → 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('rcEventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('rcTransactionId', 'local-' + Date.now());",
+                  "pm.collectionVariables.set('rcNowMs', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 unauthorized', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.equal('unauthorized');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "wrong-secret"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"{{userId}}\",\n    \"original_app_user_id\": \"{{userId}}\",\n    \"aliases\": [\n      \"{{userId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"PRODUCTION\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"INITIAL_PURCHASE\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - INITIAL_PURCHASE → 200",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('rcEventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('rcTransactionId', 'local-' + Date.now());",
+                  "pm.collectionVariables.set('rcNowMs', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with an empty JSON object', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{rcWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"{{userId}}\",\n    \"original_app_user_id\": \"{{userId}}\",\n    \"aliases\": [\n      \"{{userId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"PRODUCTION\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"INITIAL_PURCHASE\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Grants the lifetime pass to {{userId}} (processed after the 200)."
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - same event redelivered → 200 (idempotent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with an empty JSON object', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{rcWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"{{userId}}\",\n    \"original_app_user_id\": \"{{userId}}\",\n    \"aliases\": [\n      \"{{userId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"PRODUCTION\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"INITIAL_PURCHASE\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - anonymous app_user_id → 200 (stored)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('rcEventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('rcTransactionId', 'local-' + Date.now());",
+                  "pm.collectionVariables.set('rcNowMs', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with an empty JSON object', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{rcWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"$RCAnonymousID:{{rcEventId}}\",\n    \"original_app_user_id\": \"$RCAnonymousID:{{rcEventId}}\",\n    \"aliases\": [\n      \"$RCAnonymousID:{{rcEventId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"PRODUCTION\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"NON_RENEWING_PURCHASE\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - unrecognised type → 200",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('rcEventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('rcTransactionId', 'local-' + Date.now());",
+                  "pm.collectionVariables.set('rcNowMs', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 with an empty JSON object', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.deep.equal({});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{rcWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"api_version\": \"1.0\",\n  \"event\": {\n    \"id\": \"{{rcEventId}}\",\n    \"app_user_id\": \"{{userId}}\",\n    \"original_app_user_id\": \"{{userId}}\",\n    \"aliases\": [\n      \"{{userId}}\"\n    ],\n    \"entitlement_ids\": [\n      \"hajjcare_pass\"\n    ],\n    \"product_id\": \"hajjcare_lifetime_pass\",\n    \"store\": \"APP_STORE\",\n    \"environment\": \"PRODUCTION\",\n    \"transaction_id\": \"{{rcTransactionId}}\",\n    \"purchased_at_ms\": {{rcNowMs}},\n    \"expiration_at_ms\": null,\n    \"event_timestamp_ms\": {{rcNowMs}},\n    \"type\": \"SOMETHING_NEW\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook - malformed JSON → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 invalid_input', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.equal('invalid_input');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{rcWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/revenuecat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "revenuecat"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"event\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Contract guards on every HajjCare API response (CLAUDE.md A2, A3). Mailpit is not the API.",
+          "if (!pm.info.requestName.startsWith('Mailpit')) {",
+          "  const code = pm.response.code;",
+          "  if (pm.request.url.getPath().split('/').includes('auth')) {",
+          "    pm.test('[contract] never 404 or 403 under /auth', () => pm.expect(code).to.not.be.oneOf([403, 404]));",
+          "    if (code === 409) {",
+          "      pm.test('[contract] 409 only for email_taken', () => pm.expect(pm.response.json().code).to.equal('email_taken'));",
+          "    }",
+          "  }",
+          "  pm.test('[contract] never 500 (unexpected errors are 503)', () => pm.expect(code).to.not.equal(500));",
+          "  const text = pm.response.text();",
+          "  if (text.length > 0) {",
+          "    pm.test('[contract] bare JSON object, camelCase keys, no envelope', () => {",
+          "      const body = JSON.parse(text);",
+          "      pm.expect(body).to.be.an('object').and.not.be.an('array');",
+          "      pm.expect(body).to.not.have.any.keys('success', 'data', 'meta');",
+          "      const bad = [];",
+          "      const walk = (value, at) => {",
+          "        if (Array.isArray(value)) {",
+          "          value.forEach((v, i) => walk(v, at + '[' + i + ']'));",
+          "        } else if (value && typeof value === 'object') {",
+          "          Object.keys(value).forEach((key) => {",
+          "            if (!/^[a-z][A-Za-z0-9]*$/.test(key)) bad.push(at + '.' + key);",
+          "            walk(value[key], at + '.' + key);",
+          "          });",
+          "        }",
+          "      };",
+          "      walk(body, '$');",
+          "      pm.expect(bad, 'keys that are not camelCase').to.be.empty;",
+          "    });",
+          "  }",
+          "}"
+        ]
+      }
     }
   ],
   "variable": [
@@ -359,8 +3198,23 @@
       "type": "string"
     },
     {
+      "key": "mailpitUrl",
+      "value": "http://localhost:8025",
+      "type": "string"
+    },
+    {
+      "key": "rcWebhookSecret",
+      "value": "local-only-placeholder-rc-webhook-secret-0000",
+      "type": "string"
+    },
+    {
       "key": "email",
-      "value": "pilgrim@example.com",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "emailAsTyped",
+      "value": "",
       "type": "string"
     },
     {
@@ -369,7 +3223,17 @@
       "type": "string"
     },
     {
-      "key": "otpCode",
+      "key": "newPassword",
+      "value": "new staple horse battery",
+      "type": "string"
+    },
+    {
+      "key": "oldPassword",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
       "value": "",
       "type": "string"
     },
@@ -384,7 +3248,57 @@
       "type": "string"
     },
     {
+      "key": "previousRefreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "forgotPasswordBody",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "otpMessageId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "otpCode",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "oldOtpCode",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "wrongOtpCode",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lockoutWarmup",
+      "value": "",
+      "type": "string"
+    },
+    {
       "key": "resetToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rcEventId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rcTransactionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rcNowMs",
       "value": "",
       "type": "string"
     }

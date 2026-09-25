@@ -73,6 +73,18 @@ Tests start their own in-memory MongoDB (a replica set where transactions are ne
 no database has to be running. `tests/contract/` holds the tests that encode the client
 contract; a change that breaks one of them breaks the app.
 
+## Postman
+
+`postman/` holds the collection (every endpoint, with the contract checks as tests) and the
+local environment. With `docker compose up -d --build` running, import both, select
+**HajjCare - Local Docker** and run the collection: each run registers a fresh pilgrim and reads
+reset codes from Mailpit. From the command line:
+
+```bash
+npx -p newman newman run postman/HajjCare-LayerA.postman_collection.json \
+  -e postman/HajjCare-Environment.postman_environment.json
+```
+
 ## Contract check against a running server
 
 ```bash

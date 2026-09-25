@@ -71,6 +71,8 @@ curl -i -X POST https://api-staging.healthhub4u.co.uk/api/v1/auth/register \
 `201` means the account exists; `409 email_taken` means it already did. Use an address whose
 inbox you can read, so the password-reset flow can be tested end to end.
 
-A Postman collection with all eight requests is in `postman/` (set `baseUrl` to the staging URL).
+A Postman collection with all eight requests, each with the contract checks, is in `postman/`.
+For staging set `baseUrl` to the staging URL, leave `mailpitUrl` empty and put the emailed reset
+code into `otpCode` by hand (folder 5, the OTP lockout, needs Mailpit and runs only locally).
 
 TODO: who to contact for staging access, and where staging's logs are.
