@@ -8,7 +8,9 @@
  * "That email and password do not match", and a 404 on forgot-password reads as SUCCESS.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
@@ -20,6 +22,7 @@ const emailService = require('../../src/services/email.service');
 const tokenService = require('../../src/services/token.service');
 const authRouter = require('../../src/routes/v1/auth.route');
 const setupTestDB = require('../utils/setupTestDB');
+const holdNextOtpRead = require('../utils/holdNextOtpRead');
 
 // Dev emails go to a throwaway directory. config is already loaded by the Jest setup
 // (the logger requires it), so set it on the object: the mail provider reads
@@ -343,6 +346,112 @@ describe('password reset flow', () => {
       const res = await verify(email, code);
       expect(res.status).toBe(429);
       expect(res.body).toEqual({ code: 'too_many_attempts' });
+    });
+
+    describe('parallel guesses: never more than 5 compares per code', () => {
+      // A real listening server and 200 keep-alive sockets opened in advance, so a burst
+      // reaches the app at once. Through supertest (a new connection per request) the
+      // requests trickle in, and the burst passes even against the old, racy verify.
+      const BURST = 200;
+      let server;
+      let agent;
+      beforeAll((done) => {
+        server = app.listen(0, '127.0.0.1', done);
+        agent = new http.Agent({ keepAlive: true, maxSockets: BURST });
+      });
+      afterAll((done) => {
+        agent.destroy();
+        server.close(done);
+      });
+
+      /** POST over the keep-alive agent; resolves to the fields the global checks read. */
+      const postRaw = (route, body) =>
+        new Promise((resolve, reject) => {
+          const data = JSON.stringify(body);
+          const routePath = `${AUTH}/${route}`;
+          const req = http.request(
+            {
+              host: '127.0.0.1',
+              port: server.address().port,
+              agent,
+              method: 'POST',
+              path: routePath,
+              headers: {
+                'content-type': 'application/json',
+                'content-length': Buffer.byteLength(data),
+              },
+            },
+            (res) => {
+              let text = '';
+              res.setEncoding('utf8');
+              res.on('data', (chunk) => {
+                text += chunk;
+              });
+              res.on('end', () =>
+                resolve({
+                  status: res.statusCode,
+                  headers: res.headers,
+                  body: text ? JSON.parse(text) : {},
+                  req: { path: routePath },
+                })
+              );
+            }
+          );
+          req.on('error', reject);
+          req.end(data);
+        });
+      const verifyOn = (email, code) => postRaw('verify-otp', { email, code }).then(track);
+      /** Opens every socket the burst will use, with requests that touch no OTP. */
+      const warmSockets = () =>
+        Promise.all(Array.from({ length: BURST }, () => postRaw('verify-otp', {})));
+
+      const expectLocked = (res) => {
+        expect(res.status).toBe(429);
+        expect(res.body).toEqual({ code: 'too_many_attempts' });
+      };
+
+      it('the RIGHT code, read before 5 wrong codes used every attempt → 429, not 200', async () => {
+        const { email } = await signUp();
+        const code = await codeFor(email);
+        const { read, release } = holdNextOtpRead();
+        const right = verifyOn(email, code);
+        await read;
+
+        for (let i = 0; i < 5; i += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          expectInvalidOtp(await verifyOn(email, otherCode(code)));
+        }
+        release();
+
+        expectLocked(await right);
+        expect((await activeOtp(email)).attempts).toBe(5);
+      });
+
+      it('200 parallel guesses, the RIGHT code in the middle → never more than 5 codes compared', async () => {
+        const { email } = await signUp();
+        const code = await codeFor(email);
+        const middle = BURST / 2;
+        const guesses = Array.from({ length: BURST }, (_, i) =>
+          i === middle ? code : otherCode(code)
+        );
+        await warmSockets();
+        // Every guess compared against the stored hash goes through timingSafeEqual.
+        const compare = jest.spyOn(crypto, 'timingSafeEqual');
+
+        const results = await Promise.all(guesses.map((guess) => verifyOn(email, guess)));
+
+        // The right code may win one of the five attempts (200) or not (429); either way
+        // at most five guesses are compared. The racy version compared nearly all of them.
+        const compared = compare.mock.calls.length;
+        expect(compared).toBeGreaterThan(0);
+        expect(compared).toBeLessThanOrEqual(5);
+        expect((await PasswordResetOtp.findOne({ email }).lean()).attempts).toBe(compared);
+
+        expect([200, 429]).toContain(results[middle].status);
+        const others = results.filter((_, i) => i !== middle);
+        others.filter((res) => res.status === 400).forEach(expectInvalidOtp);
+        others.filter((res) => res.status !== 400).forEach(expectLocked);
+      });
     });
 
     it('after a lockout, a resend → the new code works', async () => {

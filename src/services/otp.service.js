@@ -106,12 +106,42 @@ const createOtpService = ({ now = () => new Date() } = {}) => {
   };
 
   /**
+   * Why the attempt charge in verify() matched nothing, decided from a fresh read in
+   * the spec's order. A code that is no longer the active one — spent by a concurrent
+   * verify, voided by a resend, or purged — is 'invalid', exactly as if no code had
+   * been found.
+   *
+   * @returns {Promise<'locked'|'expired'|'invalid'>}
+   */
+  const refusalFor = async (id, at) => {
+    const current = await PasswordResetOtp.findById(id);
+    if (!current || current.consumedAt || current.supersededAt) {
+      return 'invalid';
+    }
+    if (current.attempts >= maxAttempts) {
+      return 'locked';
+    }
+    if (current.expiresAt.getTime() <= at.getTime()) {
+      return 'expired';
+    }
+    // Unreachable: every field in the charge filter only ever moves one way.
+    return 'invalid';
+  };
+
+  /**
    * Checks, in this order (BACKEND_SPEC.md §3.7):
    *   a) locked   — attempts >= max, BEFORE the code, so the right code still waits;
    *   b) expired  — no attempt charged: never punish a pilgrim for a clock;
-   *   c) invalid  — wrong code, one attempt charged atomically;
+   *   c) invalid  — wrong code;
    *   d) ok       — right code, consumed atomically (single use).
    * No active code for the address, known or not, is simply 'invalid'.
+   *
+   * Every guess is charged BEFORE the code is compared, by one atomic update whose
+   * filter carries all the preconditions, so at most maxAttempts guesses are ever
+   * compared per code however many arrive in parallel. Reading `attempts` first and
+   * charging after the compare let a burst of parallel requests all read a count
+   * below the limit, and the right code among them got through. The right code is
+   * charged too, which no client can see: it is consumed straight after.
    *
    * @param {string} email
    * @param {string} code
@@ -131,30 +161,34 @@ const createOtpService = ({ now = () => new Date() } = {}) => {
     if (!doc) {
       return { error: 'invalid' };
     }
-    if (doc.attempts >= maxAttempts) {
-      return { error: 'locked' };
-    }
+
     const at = now();
-    if (doc.expiresAt.getTime() <= at.getTime()) {
-      return { error: 'expired' };
+    const charged = await PasswordResetOtp.findOneAndUpdate(
+      {
+        _id: doc._id,
+        consumedAt: null,
+        supersededAt: null,
+        attempts: { $lt: maxAttempts },
+        // An expired code is never charged: never punish a pilgrim for a clock.
+        expiresAt: { $gt: at },
+      },
+      { $inc: { attempts: 1 } }
+    );
+    if (!charged) {
+      return { error: await refusalFor(doc._id, at) };
     }
 
     const candidate = hashCode(String(doc.user), typeof code === 'string' ? code : '');
     if (typeof code !== 'string' || !hashesMatch(doc.codeHash, candidate)) {
-      const charged = await PasswordResetOtp.findOneAndUpdate(
-        { _id: doc._id, attempts: { $lt: maxAttempts } },
-        { $inc: { attempts: 1 } }
-      );
-      // Nothing matched: concurrent guesses already used the last attempt.
-      return { error: charged ? 'invalid' : 'locked' };
+      return { error: 'invalid' };
     }
 
     const consumed = await PasswordResetOtp.findOneAndUpdate(
-      { _id: doc._id, consumedAt: null },
+      { _id: doc._id, consumedAt: null, supersededAt: null },
       { $set: { consumedAt: at } }
     );
     if (!consumed) {
-      // A concurrent verify spent this code first.
+      // A concurrent verify spent this code first, or a resend voided it.
       return { error: 'invalid' };
     }
     return { ok: true, userId: String(doc.user) };

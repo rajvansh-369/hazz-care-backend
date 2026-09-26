@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const setupTestDB = require('../utils/setupTestDB');
+const holdNextOtpRead = require('../utils/holdNextOtpRead');
 const config = require('../../src/config/config');
 const { PasswordResetOtp, User } = require('../../src/models');
 const { createOtpService, hashCode } = require('../../src/services/otp.service');
@@ -127,6 +128,23 @@ describe('otp.service', () => {
       expect((await activeDoc()).attempts).toBe(5);
     });
 
+    it('4 wrong attempts, then the right code → ok (the right code is the 5th attempt)', async () => {
+      const { code } = await service.issue(user);
+      for (let i = 0; i < config.otp.maxAttempts - 1; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await expect(service.verify(user.email, otherCode(code))).resolves.toEqual({
+          error: 'invalid',
+        });
+      }
+      await expect(service.verify(user.email, code)).resolves.toEqual({
+        ok: true,
+        userId: String(user._id),
+      });
+      const doc = await PasswordResetOtp.findOne({ email: user.email }).lean();
+      expect(doc.attempts).toBe(5);
+      expect(doc.consumedAt).not.toBeNull();
+    });
+
     it('an expired code → expired, and attempts are unchanged', async () => {
       const { code } = await service.issue(user);
       await service.verify(user.email, otherCode(code));
@@ -208,6 +226,103 @@ describe('otp.service', () => {
       expect(invalid + locked).toBe(20);
       expect((await activeDoc()).attempts).toBe(5);
       await expect(service.verify(user.email, code)).resolves.toEqual({ error: 'locked' });
+    });
+
+    describe('parallel guesses never get more than 5 compares per code', () => {
+      it('the right code, read before the 5 wrong guesses used every attempt → locked, never compared', async () => {
+        const { code } = await service.issue(user);
+        const { read, release } = holdNextOtpRead();
+        const right = service.verify(user.email, code);
+        await read; // it has seen attempts: 0
+
+        for (let i = 0; i < config.otp.maxAttempts; i += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await expect(service.verify(user.email, otherCode(code))).resolves.toEqual({
+            error: 'invalid',
+          });
+        }
+        release();
+
+        await expect(right).resolves.toEqual({ error: 'locked' });
+        const doc = await activeDoc();
+        expect(doc.attempts).toBe(5);
+        expect(doc.consumedAt).toBeNull();
+      });
+
+      it('the right code, read before 199 parallel wrong guesses → locked', async () => {
+        const { code } = await service.issue(user);
+        const { read, release } = holdNextOtpRead();
+        const right = service.verify(user.email, code);
+        await read;
+
+        const wrong = await Promise.all(
+          Array.from({ length: 199 }, () => service.verify(user.email, otherCode(code)))
+        );
+        release();
+
+        await expect(right).resolves.toEqual({ error: 'locked' });
+        expect(wrong.filter((r) => r.error === 'invalid')).toHaveLength(5);
+        expect(wrong.filter((r) => r.error === 'locked')).toHaveLength(194);
+        expect((await activeDoc()).attempts).toBe(5);
+      });
+
+      it('200 parallel guesses, the right code in the middle → never more than 5 codes compared', async () => {
+        const { code } = await service.issue(user);
+        const middle = 100;
+        const guesses = Array.from({ length: 200 }, (_, i) =>
+          i === middle ? code : otherCode(code)
+        );
+        // Every guess compared against the stored hash goes through timingSafeEqual.
+        const compare = jest.spyOn(crypto, 'timingSafeEqual');
+
+        const results = await Promise.all(
+          guesses.map((guess) => service.verify(user.email, guess))
+        );
+
+        // Which guesses win the five attempts is up to the scheduler: the right code may
+        // be one of them (ok) or not (locked). What holds on every run is that no guess
+        // is compared without a charged attempt, so at most five are compared at all.
+        // The racy version compared nearly all 200 and let the right code through.
+        const compared = compare.mock.calls.length;
+        expect(compared).toBeGreaterThan(0);
+        expect(compared).toBeLessThanOrEqual(config.otp.maxAttempts);
+        const doc = await PasswordResetOtp.findOne({ email: user.email }).lean();
+        expect(doc.attempts).toBe(compared);
+
+        expect([{ error: 'locked' }, { ok: true, userId: String(user._id) }]).toContainEqual(
+          results[middle]
+        );
+        results
+          .filter((_, i) => i !== middle)
+          .forEach((result) => expect(['invalid', 'locked']).toContain(result.error));
+      });
+
+      it('a code voided by a resend after it was read → invalid, and the new code is not charged', async () => {
+        const { code } = await service.issue(user);
+        const { read, release } = holdNextOtpRead();
+        const stale = service.verify(user.email, code);
+        await read;
+
+        const fresh = await service.issue(user);
+        release();
+
+        await expect(stale).resolves.toEqual({ error: 'invalid' });
+        expect((await activeDoc()).attempts).toBe(0);
+        await expect(service.verify(user.email, fresh.code)).resolves.toMatchObject({ ok: true });
+      });
+
+      it('a code that expires after it was read → expired, attempts unchanged', async () => {
+        const { code } = await service.issue(user);
+        const { read, release } = holdNextOtpRead();
+        const late = service.verify(user.email, code);
+        await read;
+
+        advance(config.otp.ttlSeconds * SECOND);
+        release();
+
+        await expect(late).resolves.toEqual({ error: 'expired' });
+        expect((await activeDoc()).attempts).toBe(0);
+      });
     });
 
     it('two parallel verifies with the right code → exactly one ok', async () => {
