@@ -48,6 +48,8 @@ describe('config', () => {
     ['OTP_HMAC_SECRET missing', { OTP_HMAC_SECRET: undefined }],
     ['OTP_HMAC_SECRET shorter than 32', { OTP_HMAC_SECRET: 'x'.repeat(31) }],
     ['refresh lifetime below 45 days', { JWT_REFRESH_EXPIRATION_DAYS: '44' }],
+    ['refresh lifetime past a valid Date (1e8 days)', { JWT_REFRESH_EXPIRATION_DAYS: '1e8' }],
+    ['refresh lifetime empty', { JWT_REFRESH_EXPIRATION_DAYS: '' }],
     ['OTP_LENGTH 4', { OTP_LENGTH: '4' }],
     ['OTP_LENGTH 8', { OTP_LENGTH: '8' }],
     ['OTP_MAX_ATTEMPTS below 5', { OTP_MAX_ATTEMPTS: '3' }],

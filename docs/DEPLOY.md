@@ -48,7 +48,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `MONGODB_AUTO_INDEX` | `true` (indexes are also synced explicitly, §3) | |
 | `JWT_ACCESS_SECRET` | ≥ 32 characters, random | **yes** |
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | |
-| `JWT_REFRESH_EXPIRATION_DAYS` | `60` (refuses < 45: a Hajj runs ~40 days offline) | |
+| `JWT_REFRESH_EXPIRATION_DAYS` | `60` (refuses < 45: a Hajj runs ~40 days offline; refuses > 365) | |
 | `REFRESH_ROTATION_GRACE_SECONDS` | `60` | |
 | `RESET_TOKEN_TTL_SECONDS` | `600` | |
 | `OTP_HMAC_SECRET` | ≥ 32 characters, random | **yes** |
@@ -163,3 +163,20 @@ Health endpoints: `/api/v1/health` (process up) and `/api/v1/health/ready` (Mong
 
 Local full stack (MongoDB replica set + Mailpit + API, production mode): `docker compose up -d
 --build`, then `MAILPIT_URL=http://localhost:8025 npm run contract -- http://localhost:5000/api/v1`.
+
+## 9. Restoring a backup
+
+> **A restore signs pilgrims out.** `deploy/restore-mongo.sh` runs `mongorestore --drop`: every
+> collection is replaced by the backup. **Everyone who signed in, registered or refreshed after
+> the backup was taken is signed out**: the refresh token on their phone was issued after the
+> backup, so it does not exist in the restored database, and their next `POST /auth/refresh`
+> returns `401` — the one response that ends a session (BACKEND_SPEC.md §4). With the daily
+> backup that is everyone who opened the app since the last backup. A pilgrim offline in Mina
+> cannot sign back in until they have a connection.
+
+The restore also undoes everything else written since the backup: new accounts, password resets
+(the old password works again), logouts, and purchase records (RevenueCat does not redeliver a
+webhook it already had a `200` for).
+
+Restore only to recover from lost or corrupted data, never to undo a bad deploy: roll back the
+code instead (VPS-RUNBOOK.md step l). Restore commands: [VPS-RUNBOOK.md](VPS-RUNBOOK.md) step j.

@@ -69,6 +69,9 @@ const envVarsSchema = Joi.object()
     JWT_REFRESH_EXPIRATION_DAYS: Joi.number()
       .integer()
       .min(45)
+      // A ceiling so a typo cannot push expiresAt past the largest valid Date, which
+      // would make every login and register fail.
+      .max(365)
       .default(60)
       .description('Refresh token lifetime; the client assumes at least 45 days offline'),
     REFRESH_ROTATION_GRACE_SECONDS: Joi.number().integer().min(0).default(60),
