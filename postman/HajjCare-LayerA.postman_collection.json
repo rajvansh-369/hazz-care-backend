@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "hajjcare-backend-layer-a",
     "name": "HajjCare Backend API - Layer A",
-    "description": "The eight auth endpoints the Flutter client calls (BACKEND_SPEC.md §3) and the RevenueCat webhook, each with the contract checks from CLAUDE.md §A9.\n\n**Run it:** `docker compose up -d --build`, import this collection and `HajjCare-Environment.postman_environment.json`, select the environment, then Run collection (in order, no delay needed). Every run registers a fresh pilgrim.\n\n- `baseUrl` ends in `/api/v1`; paths are appended verbatim.\n- Reset codes are read from Mailpit (`mailpitUrl`, docker compose only). Against a server that sends real email, leave `mailpitUrl` empty and put the emailed code in `otpCode` by hand; folder 5 needs Mailpit.\n- Only `/auth/me` carries an Authorization header. The webhook sends `rcWebhookSecret` as its Authorization value.\n- Folder 2 relies on the 60-second rotation grace window: run it without pausing.\n- A collection-level test on every API response checks: no 404/403 under /auth, 409 only for email_taken, no 500, bare JSON object with camelCase keys.",
+    "description": "The eight auth endpoints the Flutter client calls (BACKEND_SPEC.md §3) and the RevenueCat webhook, each with the contract checks from CLAUDE.md §A9.\n\n**Run it:** `docker compose up -d --build`, import this collection and `HajjCare-Environment.postman_environment.json`, select the environment, then Run collection (in order, no delay needed). Every run registers a fresh pilgrim.\n\n- `baseUrl` ends in `/api/v1`; paths are appended verbatim.\n- Reset codes are read from Mailpit (`mailpitUrl`, docker compose only). Against a server that sends real email, leave `mailpitUrl` empty and put the emailed code in `otpCode` by hand; folder 5 needs Mailpit.\n- Only `/auth/me` carries an Authorization header. The webhook sends `rcWebhookSecret` as its Authorization value.\n- Folder 2: a used refresh token keeps working, with no time limit, until one of its children is used.\n- A collection-level test on every API response checks: no 404/403 under /auth, 409 only for email_taken, no 500, bare JSON object with camelCase keys.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -635,8 +635,8 @@
       ]
     },
     {
-      "name": "2 · Refresh (rotation, 60s grace)",
-      "description": "BACKEND_SPEC.md §3.5, §4. A 401/403 here is the only response that signs a pilgrim out. Run this folder within 60 seconds of its first request.",
+      "name": "2 · Refresh (rotation by use)",
+      "description": "BACKEND_SPEC.md §3.5, §4. A 401/403 here is the only response that signs a pilgrim out. A used refresh token keeps working, with no time limit, until one of its children is used.",
       "item": [
         {
           "name": "Auth - Refresh",
@@ -704,19 +704,19 @@
                 }
               }
             },
-            "description": "No Authorization header. Stores the rotated pair; the previous token keeps working for 60 seconds."
+            "description": "No Authorization header. Stores the rotated pair; the previous token keeps working until the new one is used."
           },
           "response": []
         },
         {
-          "name": "Refresh - previous token inside grace → 200",
+          "name": "Refresh - previous token, child unused → 200",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 with tokens (a second caller racing the rotation is not signed out)', () => {",
+                  "pm.test('200 with tokens (a lost response or a second racing caller is not signed out)', () => {",
                   "  pm.response.to.have.status(200);",
                   "  pm.expect(pm.response.json().tokens.refreshToken).to.be.a('string').and.not.empty;",
                   "});"

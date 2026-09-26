@@ -166,8 +166,8 @@ req POST /auth/refresh "{\"refreshToken\":\"$REFRESH\"}"
 NEW_REFRESH="$(jqt '.tokens.refreshToken')"
 req POST /auth/refresh "{\"refreshToken\":\"$REFRESH\"}"
 case "$STATUS" in
-  200) ok "old token still works inside the grace window (or no rotation)" ;;
-  401) bad "old token rejected immediately — a refresh race will sign a pilgrim out. Add a 60s grace window" ;;
+  200) ok "old token still works while its child is unused (or no rotation)" ;;
+  401) bad "old token rejected before its child was used — a lost response or a refresh race will sign a pilgrim out" ;;
   *)   bad "unexpected status reusing the old refresh token" "$STATUS" ;;
 esac
 req POST /auth/refresh '{"refreshToken":"this-token-never-existed"}'

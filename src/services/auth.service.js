@@ -105,10 +105,11 @@ const getMe = async (userId) => {
 const refresh = async (refreshToken) => tokenService.rotate(refreshToken);
 
 /**
- * Best effort: unknown, expired and already-revoked tokens are a no-op.
+ * Best effort. Revokes every live token in the presented token's family (this
+ * device's sign-in); an unknown token is a no-op.
  * @param {string} refreshToken non-empty
  */
-const logout = async (refreshToken) => tokenService.revoke(refreshToken, 'LOGOUT');
+const logout = async (refreshToken) => tokenService.revokeFamily(refreshToken, 'LOGOUT');
 
 /**
  * POST /auth/forgot-password. Identical outcome for every valid address, registered

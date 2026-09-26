@@ -74,7 +74,6 @@ const envVarsSchema = Joi.object()
       .max(365)
       .default(60)
       .description('Refresh token lifetime; the client assumes at least 45 days offline'),
-    REFRESH_ROTATION_GRACE_SECONDS: Joi.number().integer().min(0).default(60),
     RESET_TOKEN_TTL_SECONDS: Joi.number().integer().min(60).default(600),
 
     OTP_HMAC_SECRET: Joi.string()
@@ -178,7 +177,6 @@ const loadConfig = (env) => {
     },
     tokens: {
       refreshTtlDays: envVars.JWT_REFRESH_EXPIRATION_DAYS,
-      refreshRotationGraceSeconds: envVars.REFRESH_ROTATION_GRACE_SECONDS,
       resetTtlSeconds: envVars.RESET_TOKEN_TTL_SECONDS,
     },
     otp: {

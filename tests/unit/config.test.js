@@ -30,7 +30,7 @@ describe('config', () => {
     expect(config.apiPrefix).toBe('/api/v1');
     expect(config.trustProxy).toBe(0);
     expect(config.jwt.accessTtlSeconds).toBe(900);
-    expect(config.tokens).toEqual({ refreshTtlDays: 60, refreshRotationGraceSeconds: 60, resetTtlSeconds: 600 });
+    expect(config.tokens).toEqual({ refreshTtlDays: 60, resetTtlSeconds: 600 });
     expect(config.otp).toMatchObject({ ttlSeconds: 600, resendAfterSeconds: 60, length: 6, maxAttempts: 5, maxSendsPerHour: 5 });
     expect(config.security.passwordMinLength).toBe(8);
     expect(config.rateLimit.ipPerHour).toBe(300);
@@ -42,12 +42,23 @@ describe('config', () => {
     expect(() => load({ JWT_REFRESH_SECRET: undefined })).not.toThrow();
   });
 
+  test('a leftover REFRESH_ROTATION_GRACE_SECONDS is ignored: there is no grace window', () => {
+    expect(load({ REFRESH_ROTATION_GRACE_SECONDS: '60' }).tokens).not.toHaveProperty(
+      'refreshRotationGraceSeconds'
+    );
+  });
+
+  test.each(['45', '365'])('JWT_REFRESH_EXPIRATION_DAYS %s is accepted (the range is 45-365)', (days) => {
+    expect(load({ JWT_REFRESH_EXPIRATION_DAYS: days }).tokens.refreshTtlDays).toBe(Number(days));
+  });
+
   test.each([
     ['JWT_ACCESS_SECRET missing', { JWT_ACCESS_SECRET: undefined }],
     ['JWT_ACCESS_SECRET shorter than 32', { JWT_ACCESS_SECRET: 'x'.repeat(31) }],
     ['OTP_HMAC_SECRET missing', { OTP_HMAC_SECRET: undefined }],
     ['OTP_HMAC_SECRET shorter than 32', { OTP_HMAC_SECRET: 'x'.repeat(31) }],
     ['refresh lifetime below 45 days', { JWT_REFRESH_EXPIRATION_DAYS: '44' }],
+    ['refresh lifetime above 365 days', { JWT_REFRESH_EXPIRATION_DAYS: '366' }],
     ['refresh lifetime past a valid Date (1e8 days)', { JWT_REFRESH_EXPIRATION_DAYS: '1e8' }],
     ['refresh lifetime empty', { JWT_REFRESH_EXPIRATION_DAYS: '' }],
     ['OTP_LENGTH 4', { OTP_LENGTH: '4' }],

@@ -16,7 +16,6 @@ const defaults = {
   JWT_ACCESS_SECRET: 'test-jwt-access-secret-value-that-is-long-enough-12345678901',
   ACCESS_TOKEN_TTL_SECONDS: '900',
   JWT_REFRESH_EXPIRATION_DAYS: '60',
-  REFRESH_ROTATION_GRACE_SECONDS: '60',
   RESET_TOKEN_TTL_SECONDS: '600',
   OTP_HMAC_SECRET: 'test-otp-hmac-secret-value-that-is-long-enough-1234567890',
   OTP_TTL_SECONDS: '600',

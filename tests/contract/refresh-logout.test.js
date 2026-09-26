@@ -2,7 +2,7 @@
 
 /**
  * POST /auth/refresh and POST /auth/logout against the real app and a real replica
- * set (BACKEND_SPEC.md §3.5, §3.9, §4; CLAUDE.md A3, A7, A10 rules d, l, p).
+ * set (BACKEND_SPEC.md §3.5, §3.9, §4; CLAUDE.md A3, A4, A7, A10 rules d, l, p).
  *
  * /auth/refresh is the one response in the API that can sign a pilgrim out: a 401 or
  * 403 with a JSON content type ends the session, even with no body.
@@ -115,18 +115,40 @@ describe('refresh and logout', () => {
       expect(second.status).toBe(200);
     });
 
-    it('the old token inside the grace window → 200, and the first successor still refreshes', async () => {
+    it('a lost response: the old token again → 200 while its child is unused, and both new tokens refresh', async () => {
       const session = await signUp();
-      const successor = await refresh({ refreshToken: session.tokens.refreshToken });
-      expect(successor.status).toBe(200);
+      const lost = await refresh({ refreshToken: session.tokens.refreshToken });
+      expect(lost.status).toBe(200);
 
       const retry = await refresh({ refreshToken: session.tokens.refreshToken });
       expect(retry.status).toBe(200);
 
-      expect((await refresh({ refreshToken: successor.body.tokens.refreshToken })).status).toBe(
-        200
-      );
+      expect((await refresh({ refreshToken: lost.body.tokens.refreshToken })).status).toBe(200);
+      // A never-used sibling of the token just used: it survives that one use.
       expect((await refresh({ refreshToken: retry.body.tokens.refreshToken })).status).toBe(200);
+    });
+
+    it('the old token once one of its children has been used → 401 session_revoked', async () => {
+      const session = await signUp();
+      const child = await refresh({ refreshToken: session.tokens.refreshToken });
+      expect((await refresh({ refreshToken: child.body.tokens.refreshToken })).status).toBe(200);
+
+      expectSessionRevoked(await refresh({ refreshToken: session.tokens.refreshToken }));
+    });
+
+    it('the R1 race: a late response overwrote a newer token → the device still refreshes', async () => {
+      const session = await signUp();
+      const x = session.tokens.refreshToken;
+      const c1 = (await refresh({ refreshToken: x })).body.tokens.refreshToken; // caller A
+      const c2 = (await refresh({ refreshToken: x })).body.tokens.refreshToken; // caller B
+      const g1 = await refresh({ refreshToken: c1 }); // A uses C1 before B stores C2
+      expect(g1.status).toBe(200);
+
+      // B stores C2 over G1; the next refresh presents C2.
+      const next = await refresh({ refreshToken: c2 });
+      expect(next.status).toBe(200);
+      expectSessionRevoked(await refresh({ refreshToken: g1.body.tokens.refreshToken }));
+      expect((await refresh({ refreshToken: next.body.tokens.refreshToken })).status).toBe(200);
     });
 
     it('two simultaneous refreshes of one token → both 200, and both new tokens work', async () => {
@@ -342,6 +364,30 @@ describe('refresh and logout', () => {
       expect(stored.revokedReason).toBe('LOGOUT');
     });
 
+    it('revokes the whole family: the used parent and every sibling → 401 afterwards', async () => {
+      const session = await signUp();
+      const x = session.tokens.refreshToken;
+      const c1 = (await refresh({ refreshToken: x })).body.tokens.refreshToken;
+      const c2 = (await refresh({ refreshToken: x })).body.tokens.refreshToken;
+
+      expect((await logout({ refreshToken: c2 })).status).toBe(204);
+
+      for (const token of [x, c1, c2]) {
+        // eslint-disable-next-line no-await-in-loop
+        expectSessionRevoked(await refresh({ refreshToken: token }));
+      }
+    });
+
+    it('with an old, already-revoked token of the family still ends the session', async () => {
+      const session = await signUp();
+      const child = (await refresh({ refreshToken: session.tokens.refreshToken })).body.tokens
+        .refreshToken;
+      const current = (await refresh({ refreshToken: child })).body.tokens.refreshToken;
+
+      expect((await logout({ refreshToken: session.tokens.refreshToken })).status).toBe(204);
+      expectSessionRevoked(await refresh({ refreshToken: current }));
+    });
+
     it('the same token twice → 204 both times', async () => {
       const session = await signUp();
       expect((await logout({ refreshToken: session.tokens.refreshToken })).status).toBe(204);
@@ -392,7 +438,7 @@ describe('refresh and logout', () => {
 
     it('a database failure inside revoke → still 204', async () => {
       const session = await signUp();
-      jest.spyOn(Token, 'updateOne').mockRejectedValueOnce(new Error('connection reset'));
+      jest.spyOn(Token, 'updateMany').mockRejectedValueOnce(new Error('connection reset'));
       const res = await logout({ refreshToken: session.tokens.refreshToken });
       expect(res.status).toBe(204);
     });

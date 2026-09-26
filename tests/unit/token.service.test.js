@@ -5,11 +5,17 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const setupTestDB = require('../utils/setupTestDB');
 const config = require('../../src/config/config');
+const logger = require('../../src/config/logger');
 const { Token, User } = require('../../src/models');
-const { createTokenService, hashToken } = require('../../src/services/token.service');
+const {
+  createTokenService,
+  hashToken,
+  MAX_LIVE_CHILDREN,
+} = require('../../src/services/token.service');
 
 const SECOND = 1000;
-const DAY = 24 * 60 * 60 * SECOND;
+const HOUR = 60 * 60 * SECOND;
+const DAY = 24 * HOUR;
 const T0 = new Date('2026-09-24T12:00:00.000Z').getTime();
 
 describe('token.service', () => {
@@ -25,6 +31,13 @@ describe('token.service', () => {
   const activeRefreshCount = (filter = {}) =>
     Token.countDocuments({ type: 'refresh', revokedAt: null, ...filter });
   const docFor = (raw) => Token.findOne({ tokenHash: hashToken(raw) }).lean();
+
+  /** Refreshes with `raw`, fails the test on a dead token, returns the new refresh token. */
+  const use = async (raw) => {
+    const pair = await service.rotate(raw);
+    expect(pair).not.toBeNull();
+    return pair.refreshToken;
+  };
 
   beforeAll(async () => {
     await Promise.all([Token.createCollection(), User.createCollection()]);
@@ -56,6 +69,14 @@ describe('token.service', () => {
       expect(doc.purgeAt.getTime() - doc.expiresAt.getTime()).toBe(7 * DAY);
       expect(doc.type).toBe('refresh');
       expect(typeof doc.familyId).toBe('string');
+    });
+
+    it('a sign-in token has no parent, is unused and has no children', async () => {
+      const pair = await service.issuePair(user._id);
+      const doc = await docFor(pair.refreshToken);
+      expect(doc.parent).toBeNull();
+      expect(doc.rotatedAt).toBeNull();
+      expect(doc.childCount).toBe(0);
     });
 
     it('returns expiresIn as a number equal to ACCESS_TOKEN_TTL_SECONDS', async () => {
@@ -90,7 +111,7 @@ describe('token.service', () => {
   });
 
   describe('rotate', () => {
-    it('returns a new pair, and the new refresh token rotates in turn', async () => {
+    it('the first use returns a new pair and marks the token used, not revoked', async () => {
       const first = await service.issuePair(user._id);
       const second = await service.rotate(first.refreshToken);
 
@@ -98,64 +119,115 @@ describe('token.service', () => {
       expect(second.refreshToken).not.toBe(first.refreshToken);
       expect(second.expiresIn).toBe(config.jwt.accessTtlSeconds);
 
-      const old = await docFor(first.refreshToken);
-      const successor = await docFor(second.refreshToken);
-      expect(old.revokedReason).toBe('ROTATED');
-      expect(old.rotatedAt.getTime()).toBe(T0);
-      expect(old.replacedBy).toEqual(successor._id);
-      expect(successor.familyId).toBe(old.familyId);
+      const used = await docFor(first.refreshToken);
+      const child = await docFor(second.refreshToken);
+      expect(used.rotatedAt.getTime()).toBe(T0);
+      expect(used.revokedAt).toBeNull();
+      expect(used.childCount).toBe(1);
+      expect(child.parent).toEqual(used._id);
+      expect(child.familyId).toBe(used.familyId);
+      expect(child.rotatedAt).toBeNull();
 
-      advance(3600 * SECOND);
-      const third = await service.rotate(second.refreshToken);
-      expect(third).not.toBeNull();
+      advance(HOUR);
+      await expect(service.rotate(second.refreshToken)).resolves.not.toBeNull();
     });
 
-    it('slides the window: the successor expires a full TTL after the rotation', async () => {
+    it('slides the window: a child expires a full TTL after it was minted', async () => {
       const first = await service.issuePair(user._id);
       advance(10 * DAY);
-      const second = await service.rotate(first.refreshToken);
-      const successor = await docFor(second.refreshToken);
-      expect(successor.expiresAt.getTime()).toBe(clock + config.tokens.refreshTtlDays * DAY);
+      const child = await docFor(await use(first.refreshToken));
+      expect(child.expiresAt.getTime()).toBe(clock + config.tokens.refreshTtlDays * DAY);
     });
 
-    it('the OLD token at +1s returns a fresh pair, and the first successor still rotates', async () => {
-      const first = await service.issuePair(user._id);
-      const successor = await service.rotate(first.refreshToken);
+    describe('a lost response: the old token keeps working while no child has been used', () => {
+      it('retried hours later → a fresh pair (a sibling of the lost child)', async () => {
+        const x = await service.issuePair(user._id);
+        const lost = await use(x.refreshToken); // the response never reached the phone
 
-      advance(1 * SECOND);
-      const retry = await service.rotate(first.refreshToken);
-      expect(retry).not.toBeNull();
-      expect(retry.refreshToken).not.toBe(successor.refreshToken);
-      expect((await docFor(retry.refreshToken)).familyId).toBe(
-        (await docFor(first.refreshToken)).familyId
+        advance(6 * HOUR);
+        const retry = await use(x.refreshToken);
+
+        expect(retry).not.toBe(lost);
+        const xDoc = await docFor(x.refreshToken);
+        expect((await docFor(retry)).parent).toEqual(xDoc._id);
+        expect(xDoc.childCount).toBe(2);
+        expect(xDoc.revokedAt).toBeNull();
+        // Both children are live: whichever the phone holds works.
+        await expect(activeRefreshCount({ parent: xDoc._id })).resolves.toBe(2);
+      });
+
+      it('has no time limit: still works 59 days after it was issued', async () => {
+        const x = await service.issuePair(user._id);
+        await use(x.refreshToken);
+        advance(59 * DAY);
+        await expect(service.rotate(x.refreshToken)).resolves.not.toBeNull();
+      });
+
+      it('but not past its own expiry', async () => {
+        const x = await service.issuePair(user._id);
+        await use(x.refreshToken);
+        advance(config.tokens.refreshTtlDays * DAY + SECOND);
+        await expect(service.rotate(x.refreshToken)).resolves.toBeNull();
+      });
+    });
+
+    it('the old token dies once one of its children is used, logged as reuse (R2 lands here too)', async () => {
+      const x = await service.issuePair(user._id);
+      const child = await use(x.refreshToken);
+      const grandchild = await use(child);
+      const { familyId } = await docFor(x.refreshToken);
+
+      const warn = jest.spyOn(logger, 'warn');
+      await expect(service.rotate(x.refreshToken)).resolves.toBeNull();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('family moved on'),
+        expect.objectContaining({ kind: 'reuse', familyId, userId: String(user._id) })
       );
-
-      await expect(service.rotate(successor.refreshToken)).resolves.not.toBeNull();
-      await expect(service.rotate(retry.refreshToken)).resolves.not.toBeNull();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(x.refreshToken);
+      expect((await docFor(x.refreshToken)).revokedReason).toBe('SUPERSEDED');
+      // Log only: the rest of the family is untouched.
+      await expect(service.rotate(grandchild)).resolves.not.toBeNull();
     });
 
-    it('the old token at exactly +60s is still inside the window', async () => {
-      const first = await service.issuePair(user._id);
-      await service.rotate(first.refreshToken);
-      advance(60 * SECOND);
-      await expect(service.rotate(first.refreshToken)).resolves.not.toBeNull();
+    it('the R1 race: a late response overwrote a newer token, and the device is not signed out', async () => {
+      const x = await service.issuePair(user._id);
+      const c1 = await use(x.refreshToken); // caller A
+      const c2 = await use(x.refreshToken); // caller B, the same old token: a sibling
+      const g1 = await use(c1); // A uses C1 before B has stored C2
+
+      // C2 is a never-used sibling of the used C1: it survives that use.
+      expect((await docFor(c2)).revokedAt).toBeNull();
+
+      // B stores C2 over G1. The device's next refresh presents C2.
+      const h = await use(c2);
+
+      // That use ended the other branch.
+      await expect(service.rotate(g1)).resolves.toBeNull();
+      await expect(service.rotate(c1)).resolves.toBeNull();
+      await expect(service.rotate(x.refreshToken)).resolves.toBeNull();
+      await expect(service.rotate(h)).resolves.not.toBeNull();
     });
 
-    it('the old token at +61s → null, and the family is NOT revoked', async () => {
-      const first = await service.issuePair(user._id);
-      const successor = await service.rotate(first.refreshToken);
-      const { familyId } = await docFor(first.refreshToken);
+    it('a never-used sibling survives one use in the family and dies at the next, logged as superseded', async () => {
+      const x = await service.issuePair(user._id);
+      const c1 = await use(x.refreshToken);
+      const c2 = await use(x.refreshToken);
+      const g1 = await use(c1);
+      expect((await docFor(c2)).revokedAt).toBeNull();
 
-      advance(61 * SECOND);
-      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
+      await use(g1);
 
-      const successorDoc = await docFor(successor.refreshToken);
-      expect(successorDoc.revokedAt).toBeNull();
-      await expect(activeRefreshCount({ familyId })).resolves.toBe(1);
-      await expect(service.rotate(successor.refreshToken)).resolves.not.toBeNull();
+      const warn = jest.spyOn(logger, 'warn');
+      await expect(service.rotate(c2)).resolves.toBeNull();
+      expect((await docFor(c2)).revokedReason).toBe('SUPERSEDED');
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ kind: 'superseded' })
+      );
     });
 
-    it('two concurrent rotations of one active token both succeed, and every token returned stays active', async () => {
+    it('two concurrent refreshes of one token both succeed, and every token returned stays live', async () => {
       const first = await service.issuePair(user._id);
 
       const results = await Promise.all([
@@ -172,62 +244,52 @@ describe('token.service', () => {
         expect(doc).not.toBeNull();
         expect(doc.revokedAt).toBeNull();
       });
-      // Exactly one claim happened: one successor linked, no orphan writes from retries.
+      // One first use and one sibling; no orphan writes from retried attempts.
       await expect(Token.countDocuments({ type: 'refresh' })).resolves.toBe(3);
-      await expect(activeRefreshCount()).resolves.toBe(2);
+      expect((await docFor(first.refreshToken)).childCount).toBe(2);
+    });
+
+    it("a child's first use racing its parent's sibling mint: the child always wins, the parent gets a pair or a 401, never an error", async () => {
+      const x = await service.issuePair(user._id);
+      const c1 = await use(x.refreshToken);
+
+      const [child, parent] = await Promise.all([service.rotate(c1), service.rotate(x.refreshToken)]);
+
+      expect(child).not.toBeNull();
+      expect((await docFor(x.refreshToken)).revokedReason).toBe('SUPERSEDED');
+      if (parent !== null) {
+        // The sibling was minted first, so it is a never-used sibling of C1: live.
+        expect((await docFor(parent.refreshToken)).revokedAt).toBeNull();
+      }
+    });
+
+    it(`at ${MAX_LIVE_CHILDREN} never-used children the oldest is revoked to make room, always a pair, with a warning`, async () => {
+      const x = await service.issuePair(user._id);
+      const children = [];
+      for (let i = 0; i < MAX_LIVE_CHILDREN; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        children.push(await use(x.refreshToken));
+      }
+      const xDoc = await docFor(x.refreshToken);
+      await expect(activeRefreshCount({ parent: xDoc._id })).resolves.toBe(MAX_LIVE_CHILDREN);
+
+      const warn = jest.spyOn(logger, 'warn');
+      await use(x.refreshToken);
+
+      await expect(activeRefreshCount({ parent: xDoc._id })).resolves.toBe(MAX_LIVE_CHILDREN);
+      expect((await docFor(children[0])).revokedReason).toBe('SUPERSEDED');
+      expect((await docFor(children[1])).revokedAt).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('cap'),
+        expect.objectContaining({ cap: MAX_LIVE_CHILDREN, familyId: xDoc.familyId })
+      );
+      await expect(service.rotate(children[0])).resolves.toBeNull();
+      await expect(service.rotate(children[1])).resolves.not.toBeNull();
     });
 
     it('an expired token → null', async () => {
       const first = await service.issuePair(user._id);
       advance(config.tokens.refreshTtlDays * DAY + SECOND);
-      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
-    });
-
-    it('a LOGOUT-revoked token → null', async () => {
-      const first = await service.issuePair(user._id);
-      await service.revoke(first.refreshToken, 'LOGOUT');
-      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
-    });
-
-    it('an unknown token → null; "" → null; non-strings → null', async () => {
-      await expect(service.rotate('never-issued')).resolves.toBeNull();
-      await expect(service.rotate('')).resolves.toBeNull();
-      await expect(service.rotate(undefined)).resolves.toBeNull();
-      await expect(service.rotate(12345)).resolves.toBeNull();
-      await expect(service.rotate({ $ne: null })).resolves.toBeNull();
-    });
-
-    it('a deleted user → null, and the claim is rolled back', async () => {
-      const first = await service.issuePair(user._id);
-      await User.deleteOne({ _id: user._id });
-
-      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
-      const doc = await docFor(first.refreshToken);
-      expect(doc.revokedAt).toBeNull();
-      await expect(Token.countDocuments({})).resolves.toBe(1);
-    });
-
-    it('a deleted user → null inside the grace window too', async () => {
-      const first = await service.issuePair(user._id);
-      await service.rotate(first.refreshToken);
-      await User.deleteOne({ _id: user._id });
-      advance(SECOND);
-      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
-    });
-
-    it('a logout of the successor ends the grace window for the old token', async () => {
-      const first = await service.issuePair(user._id);
-      const successor = await service.rotate(first.refreshToken);
-      await service.revoke(successor.refreshToken, 'LOGOUT');
-      advance(SECOND);
-      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
-    });
-
-    it('a password reset (revokeAllForUser) ends the grace window for the old token', async () => {
-      const first = await service.issuePair(user._id);
-      await service.rotate(first.refreshToken);
-      await service.revokeAllForUser(user._id, 'PASSWORD_RESET');
-      advance(SECOND);
       await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
     });
 
@@ -240,6 +302,59 @@ describe('token.service', () => {
     it('a token issued at t0 is dead at t0 + 61 days', async () => {
       const first = await service.issuePair(user._id);
       advance(61 * DAY);
+      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
+    });
+
+    it('a logged-out token → null, and nothing is logged as reuse', async () => {
+      const first = await service.issuePair(user._id);
+      await service.revokeFamily(first.refreshToken, 'LOGOUT');
+      const warn = jest.spyOn(logger, 'warn');
+      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('a logout anywhere in the family kills the used parent too', async () => {
+      const x = await service.issuePair(user._id);
+      const child = await use(x.refreshToken);
+      await service.revokeFamily(child, 'LOGOUT');
+      await expect(service.rotate(x.refreshToken)).resolves.toBeNull();
+    });
+
+    it('a password reset (revokeAllForUser) kills every token, used or not', async () => {
+      const x = await service.issuePair(user._id);
+      const c1 = await use(x.refreshToken);
+      const c2 = await use(x.refreshToken);
+      await service.revokeAllForUser(user._id, 'PASSWORD_RESET');
+      advance(SECOND);
+      for (const raw of [x.refreshToken, c1, c2]) {
+        // eslint-disable-next-line no-await-in-loop
+        await expect(service.rotate(raw)).resolves.toBeNull();
+      }
+    });
+
+    it('an unknown token → null; "" → null; non-strings → null', async () => {
+      await expect(service.rotate('never-issued')).resolves.toBeNull();
+      await expect(service.rotate('')).resolves.toBeNull();
+      await expect(service.rotate(undefined)).resolves.toBeNull();
+      await expect(service.rotate(12345)).resolves.toBeNull();
+      await expect(service.rotate({ $ne: null })).resolves.toBeNull();
+    });
+
+    it('a deleted user → null, and nothing is written', async () => {
+      const first = await service.issuePair(user._id);
+      await User.deleteOne({ _id: user._id });
+
+      await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
+      const doc = await docFor(first.refreshToken);
+      expect(doc.revokedAt).toBeNull();
+      expect(doc.rotatedAt).toBeNull();
+      await expect(Token.countDocuments({})).resolves.toBe(1);
+    });
+
+    it('a deleted user → null for a used token too', async () => {
+      const first = await service.issuePair(user._id);
+      await use(first.refreshToken);
+      await User.deleteOne({ _id: user._id });
       await expect(service.rotate(first.refreshToken)).resolves.toBeNull();
     });
 
@@ -258,6 +373,18 @@ describe('token.service', () => {
 
       await expect(service.rotate(first.refreshToken)).rejects.toThrow('primary stepped down');
       expect((await docFor(first.refreshToken)).revokedAt).toBeNull();
+    });
+
+    it('a failure minting the child rolls the whole attempt back, and a retry works', async () => {
+      const first = await service.issuePair(user._id);
+      jest.spyOn(Token, 'create').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(service.rotate(first.refreshToken)).rejects.toThrow('disk full');
+      const doc = await docFor(first.refreshToken);
+      expect(doc.rotatedAt).toBeNull();
+      expect(doc.childCount).toBe(0);
+
+      await expect(service.rotate(first.refreshToken)).resolves.not.toBeNull();
     });
   });
 
@@ -315,24 +442,66 @@ describe('token.service', () => {
     });
   });
 
-  describe('revoke / revokeAllForUser', () => {
-    it('revoke is idempotent and keeps the first reason and time', async () => {
+  describe('revokeFamily / revokeAllForUser', () => {
+    it('revokes the presented token and every live token in its family', async () => {
+      const x = await service.issuePair(user._id);
+      const c1 = await use(x.refreshToken);
+      const c2 = await use(x.refreshToken);
+      const { familyId } = await docFor(x.refreshToken);
+
+      await service.revokeFamily(c1, 'LOGOUT');
+
+      await expect(activeRefreshCount({ familyId })).resolves.toBe(0);
+      await expect(Token.countDocuments({ familyId, revokedReason: 'LOGOUT' })).resolves.toBe(3);
+      for (const raw of [x.refreshToken, c1, c2]) {
+        // eslint-disable-next-line no-await-in-loop
+        await expect(service.rotate(raw)).resolves.toBeNull();
+      }
+    });
+
+    it('works from any known token: an already-revoked one still ends the family', async () => {
+      const x = await service.issuePair(user._id);
+      const child = await use(x.refreshToken);
+      const grandchild = await use(child); // x is now revoked as SUPERSEDED
+
+      await service.revokeFamily(x.refreshToken, 'LOGOUT');
+
+      await expect(service.rotate(grandchild)).resolves.toBeNull();
+      expect((await docFor(grandchild)).revokedReason).toBe('LOGOUT');
+      expect((await docFor(x.refreshToken)).revokedReason).toBe('SUPERSEDED');
+    });
+
+    it('leaves other families and other users alone', async () => {
+      const other = await User.create({ email: 'other@x.com', passwordHash: 'h' });
+      const phone = await service.issuePair(user._id);
+      const tablet = await service.issuePair(user._id);
+      const theirs = await service.issuePair(other._id);
+
+      await service.revokeFamily(phone.refreshToken, 'LOGOUT');
+
+      await expect(service.rotate(tablet.refreshToken)).resolves.not.toBeNull();
+      await expect(service.rotate(theirs.refreshToken)).resolves.not.toBeNull();
+    });
+
+    it('is idempotent and keeps the first reason and time', async () => {
       const pair = await service.issuePair(user._id);
-      await service.revoke(pair.refreshToken, 'LOGOUT');
+      await service.revokeFamily(pair.refreshToken, 'LOGOUT');
       const first = await docFor(pair.refreshToken);
 
       advance(SECOND);
-      await service.revoke(pair.refreshToken, 'ADMIN');
+      await service.revokeFamily(pair.refreshToken, 'ADMIN');
       const second = await docFor(pair.refreshToken);
 
       expect(second.revokedReason).toBe('LOGOUT');
       expect(second.revokedAt).toEqual(first.revokedAt);
     });
 
-    it('revoke of unknown, empty or non-string tokens is a no-op', async () => {
-      await expect(service.revoke('never-issued')).resolves.toBeUndefined();
-      await expect(service.revoke('')).resolves.toBeUndefined();
-      await expect(service.revoke(null)).resolves.toBeUndefined();
+    it('of unknown, empty or non-string tokens is a no-op', async () => {
+      await service.issuePair(user._id);
+      await expect(service.revokeFamily('never-issued')).resolves.toBeUndefined();
+      await expect(service.revokeFamily('')).resolves.toBeUndefined();
+      await expect(service.revokeFamily(null)).resolves.toBeUndefined();
+      await expect(activeRefreshCount()).resolves.toBe(1);
     });
 
     it('revokeAllForUser revokes every active refresh token of that user only', async () => {

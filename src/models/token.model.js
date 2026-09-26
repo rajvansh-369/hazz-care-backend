@@ -3,15 +3,18 @@
 const mongoose = require('mongoose');
 const { toJSON } = require('./plugins');
 
-const REVOKED_REASONS = ['LOGOUT', 'ROTATED', 'PASSWORD_RESET', 'ADMIN'];
+// SUPERSEDED: another token in the family was used, so this one can no longer refresh
+// (CLAUDE.md A10 rule l). Rotation itself revokes nothing.
+const REVOKED_REASONS = ['LOGOUT', 'SUPERSEDED', 'PASSWORD_RESET', 'ADMIN'];
 
 /**
  * Refresh and reset tokens. Only the hash is stored; the raw token never touches the
  * database (CLAUDE.md A8, C3).
  *
- * Refresh rotation (CLAUDE.md A10 rule l): the old token records `replacedBy` and
- * `rotatedAt`, and stays usable for REFRESH_ROTATION_GRACE_SECONDS measured from
- * `rotatedAt`. `familyId` links every token descended from one sign-in.
+ * Refresh tokens from one sign-in form a tree (the family, `familyId`): each token
+ * records the `parent` it was minted from. `rotatedAt` is the first time a token was
+ * used; it stays usable, minting siblings for its child, until one of its children is
+ * used (CLAUDE.md A10 rule l). `childCount` counts every child it minted.
  *
  * Reset tokens are single use: `consumedAt` is set atomically when one is spent.
  */
@@ -48,14 +51,21 @@ const tokenSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    // The token this one was minted from; null for the token a sign-in issues.
+    parent: {
+      type: mongoose.SchemaTypes.ObjectId,
+      ref: 'Token',
+      default: null,
+      index: true,
+    },
     rotatedAt: {
       type: Date,
       default: null,
     },
-    replacedBy: {
-      type: mongoose.SchemaTypes.ObjectId,
-      ref: 'Token',
-      default: null,
+    childCount: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     revokedAt: {
       type: Date,

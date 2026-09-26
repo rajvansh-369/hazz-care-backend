@@ -89,17 +89,28 @@ describe('Token Model', () => {
       expect(field.options.default).toBe(null);
     });
 
-    it('has replacedBy (Token ref) defaulting to null', () => {
-      const field = Token.schema.paths.replacedBy;
+    it('has an indexed parent (Token ref) defaulting to null: the token it was minted from', () => {
+      const field = Token.schema.paths.parent;
       expect(field.options.required).toBeUndefined();
       expect(field.options.ref).toBe('Token');
       expect(field.options.default).toBe(null);
+      expect(field.options.index).toBe(true);
     });
 
-    it('has revokedReason restricted to LOGOUT | ROTATED | PASSWORD_RESET | ADMIN, default null', () => {
+    it('has childCount (Number) defaulting to 0', () => {
+      const field = Token.schema.paths.childCount;
+      expect(field.instance).toBe('Number');
+      expect(field.options.default).toBe(0);
+    });
+
+    it('no longer has replacedBy: one pointer cannot hold siblings', () => {
+      expect(Token.schema.paths.replacedBy).toBeUndefined();
+    });
+
+    it('has revokedReason restricted to LOGOUT | SUPERSEDED | PASSWORD_RESET | ADMIN, default null', () => {
       const field = Token.schema.paths.revokedReason;
       expect(field.options.default).toBe(null);
-      expect(Token.REVOKED_REASONS).toEqual(['LOGOUT', 'ROTATED', 'PASSWORD_RESET', 'ADMIN']);
+      expect(Token.REVOKED_REASONS).toEqual(['LOGOUT', 'SUPERSEDED', 'PASSWORD_RESET', 'ADMIN']);
     });
 
     it('has timestamps (createdAt, updatedAt)', () => {
@@ -138,17 +149,21 @@ describe('Token Model', () => {
       await expect(newToken({ purgeAt: undefined }).validate()).rejects.toThrow(/purgeAt/);
     });
 
-    it.each(['LOGOUT', 'ROTATED', 'PASSWORD_RESET', 'ADMIN', null])(
+    it.each(['LOGOUT', 'SUPERSEDED', 'PASSWORD_RESET', 'ADMIN', null])(
       'accepts revokedReason %p',
       async (reason) => {
         await expect(newToken({ revokedReason: reason }).validate()).resolves.toBeUndefined();
       }
     );
 
-    it('rejects an unknown revokedReason', async () => {
-      await expect(newToken({ revokedReason: 'EXPIRED' }).validate()).rejects.toThrow(
+    it.each(['EXPIRED', 'ROTATED'])('rejects revokedReason %p', async (reason) => {
+      await expect(newToken({ revokedReason: reason }).validate()).rejects.toThrow(
         /revokedReason/
       );
+    });
+
+    it('rejects a negative childCount', async () => {
+      await expect(newToken({ childCount: -1 }).validate()).rejects.toThrow(/childCount/);
     });
   });
 });

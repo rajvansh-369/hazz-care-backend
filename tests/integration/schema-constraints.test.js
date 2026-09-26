@@ -103,22 +103,24 @@ describe('Schema constraints against a real MongoDB', () => {
       expect(error.message).toContain('tokenHash');
     });
 
-    it('round-trips the rotation fields used by the grace window', async () => {
-      const oldToken = await Token.create(tokenFields(userId));
-      const newToken = await Token.create(tokenFields(userId));
+    it('round-trips the rotation fields: parent, rotatedAt, childCount', async () => {
+      const parent = await Token.create(tokenFields(userId));
+      const child = await Token.create(tokenFields(userId, { parent: parent._id }));
       const rotatedAt = new Date();
 
       await Token.updateOne(
-        { _id: oldToken._id, rotatedAt: null },
-        { replacedBy: newToken._id, rotatedAt }
+        { _id: parent._id, rotatedAt: null },
+        { $set: { rotatedAt }, $inc: { childCount: 1 } }
       );
 
-      const stored = await Token.findById(oldToken._id).lean();
-      expect(stored.replacedBy).toEqual(newToken._id);
+      const stored = await Token.findById(parent._id).lean();
+      expect(stored.parent).toBeNull();
       expect(stored.rotatedAt).toEqual(rotatedAt);
+      expect(stored.childCount).toBe(1);
       expect(stored.revokedAt).toBeNull();
       expect(stored.revokedReason).toBeNull();
       expect(stored.consumedAt).toBeNull();
+      expect((await Token.findById(child._id).lean()).parent).toEqual(parent._id);
     });
   });
 

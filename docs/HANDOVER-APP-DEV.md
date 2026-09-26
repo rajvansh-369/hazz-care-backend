@@ -31,9 +31,9 @@ Force the real client with `--dart-define=HAJJCARE_USE_MOCK_BACKEND=false`.
 | 2. Path prefix | `/api/v1`, carried in the base URL |
 | 3. Register status | **`201`** |
 | 4. Access token lifetime | **900 s** (15 min) |
-| 5. Refresh token | **60 days, rotated on every refresh, with a 60-second grace window**: the previous refresh token keeps returning a valid pair for 60 s after it was rotated, so the background refresher and the 401 interceptor can race safely |
+| 5. Refresh token | **60 days by default, sliding** (every successful refresh starts a new 60 days; the server accepts 45–365). **Rotated on every refresh, invalidated by use, not by time**: the previous refresh token keeps returning a fresh pair, with no time limit, until one of the tokens it returned is used, and only then answers `401`. So a refresh response lost in transit costs nothing (the retry, hours later, still works), and the background refresher and the 401 interceptor can race safely: both get `200`. **[Changed 2026-09-26]** This replaces the 60-second grace window, which signed a pilgrim out when a refresh response was lost and the next attempt came more than 60 s later. No change to any request, response or status code |
 | 6. `expiresIn` | **Always sent** on register, login and refresh, in seconds |
-| 7. Logout | Revokes **that one device's** refresh token. Always `204`, including `{"refreshToken": ""}`. No "sign out all devices" |
+| 7. Logout | Revokes **that one device's session**: the token sent and every token issued from the same sign-in, so no earlier or parallel token of that device survives. Other devices are untouched. Always `204`, including `{"refreshToken": ""}`. No "sign out all devices" |
 | 8. `user.id` | Opaque string (a MongoDB ObjectId in hex), stable forever, identical on register, login and `/auth/me` |
 | 9. `emailVerified` | **Always `true`**. There is no verification flow |
 | 10. `fullName` | Optional; `null` accepted and returned as `null`. Trimmed; a blank name becomes `null` |

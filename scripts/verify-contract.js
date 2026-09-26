@@ -502,8 +502,8 @@ const run = async () => {
   else {bad('refreshToken missing from refresh response');}
   const NEW_REFRESH = raw('tokens.refreshToken');
   await req('POST', '/auth/refresh', json({ refreshToken: REFRESH }));
-  if (STATUS === '200') {ok('old token still works inside the grace window (or no rotation)');}
-  else if (STATUS === '401') {bad('old token rejected immediately — a refresh race will sign a pilgrim out. Add a 60s grace window');}
+  if (STATUS === '200') {ok('old token still works while its child is unused (or no rotation)');}
+  else if (STATUS === '401') {bad('old token rejected before its child was used — a lost response or a refresh race will sign a pilgrim out');}
   else {bad('unexpected status reusing the old refresh token', STATUS);}
   await req('POST', '/auth/refresh', '{"refreshToken":"this-token-never-existed"}');
   if (STATUS === '401') {ok('unknown refresh token → 401 (a deliberate sign-out)');}

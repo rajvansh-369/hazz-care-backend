@@ -146,18 +146,65 @@ of the auth feature — see Layer B.
 | | Value | Firmness |
 |---|---|---|
 | Access token | 15 min (`expiresIn: 900`) | proposal, any value works |
-| Refresh token | **≥ 45 days**, 60 proposed | **firm floor.** PRS said 30d — that is a bug: a Hajj trip runs ~40 days offline |
+| Refresh token | **60 days** default, **sliding** (every successful refresh starts a new window), configurable **45–365**; the server refuses to start outside that range | **45-day floor firm.** PRS said 30d — that is a bug: a Hajj trip runs ~40 days offline |
 | Reset token | 600s, single-use | single-use firm |
 | OTP code | 600s | see A6 |
 
-### Refresh rotation
+### Refresh rotation — by use, not by time
 
-Rotate, and keep the old token working for a **60-second grace window** returning the current
-pair. Two uncoordinated client callers exist (a background refresher that runs at launch and on
-every resume, at most once per six hours, and the 401 interceptor — BACKEND_SPEC.md §3.5).
-**PRS §4's "reuse detection revokes the whole device family" without a grace window will sign
-pilgrims out at random.** If you would rather not rotate at all, that is simpler and safe — just
-echo the same `refreshToken` back. The field is required either way.
+> **REVERSAL (2026-09-26) — the 60-second grace window is gone.** This section used to say:
+> rotate, and keep the old token working for a 60-second grace window. Audit finding 5c: when a
+> refresh response is lost (dropped connection, the app suspended right after launch) the server
+> has rotated but the phone still holds the old token, and its next attempt comes hours later —
+> the background refresher waits six hours after the last *attempt* (BACKEND_SPEC.md §3.5). The
+> grace window had long closed, so that refresh answered `401` and **signed the pilgrim out**. No
+> TTL could fix it. The client team confirmed the replacement: it never keys on the refresh token
+> value, and only a `401` from `/auth/refresh` signs anyone out.
+
+Every token from one sign-in belongs to a **family** (one device's session), and every token
+records the `parent` it was minted from. `POST /auth/refresh` with token X
+(`src/services/token.service.js`):
+
+1. X unknown, expired, revoked, or its user gone → `401`.
+2. X never used → mark it used and mint its first child (`expiresAt = now + TTL`).
+3. X used, but none of its children used yet → mint another child, a sibling of the first.
+   **No time limit.** The existing children stay valid: two uncoordinated client callers (the
+   background refresher and the 401 interceptor) must both get `200`, and a device whose response
+   was lost gets a working token however long it takes to retry.
+4. Using a token revokes (`SUPERSEDED`) its parent and every other live token in the family
+   **except its own never-used siblings**, which die one generation later, at the family's next
+   use. The one-generation delay exists for the **R1 race**: caller A gets C1 and caller B gets
+   C2 from the same X; A uses C1 before B has stored C2; B then overwrites the stored token with
+   C2. Revoking C2 at C1's use would have signed the pilgrim out; instead C2's use ends C1's branch.
+5. X used and one of its children used → `401`, logged at warn as kind `'reuse'` with `familyId`.
+   **Nothing else is revoked** (see the gate below).
+6. At **10** live never-used children of one token, the oldest is revoked to make room, the call
+   answers `200`, and a warning is logged. Never `429`/`503` at the cap: a device whose responses
+   keep getting lost would be stuck until its 45-day local window ran out.
+7. Logout with any *known* token of the family (live, used or revoked) revokes every live token in
+   the family; an unknown or empty token is a no-op. Password reset revokes every family.
+
+> **HARD GATE — reuse detection (rule 5).** Reuse is logged and never acted on: revoking the whole
+> family on reuse would let anyone holding a stale token sign the pilgrim out, and would turn a
+> late duplicate whose response the client already abandoned into a sign-out. That is acceptable
+> **only because today a refresh token unlocks nothing but `GET /auth/me`** (email and full name).
+> **No endpoint that serves or accepts user data — health-data sync or anything else in Layer B —
+> may accept access tokens from these families until this decision has been revisited and
+> recorded here.** Building such an endpoint without that decision is a blocking defect, not a
+> follow-up.
+
+> **KNOWN, ACCEPTED RISK — the R2 race.** Caller B's *request* with X reaches the server only after
+> one of X's children has already been used. X is then dead (rule 5), B gets `401` and the pilgrim
+> is signed out. It needs a third refresh call inside one in-flight window — the client makes at
+> most one background refresh per six hours plus a single-flight interceptor, so only something
+> outside that model (the app killed and relaunched mid-request) produces it — and the whole round
+> trip must finish inside the client's timeouts (connect 10 s + send 15 s + receive 15 s), or the
+> client ignores the answer. Covering it would mean X stays usable until a *grandchild* is used,
+> weakening rule 5 for everyone. It appears in the logs as kind `'reuse'`; a rising count of those
+> is the signal to revisit.
+
+If you would rather not rotate at all, that is simpler and safe — just echo the same
+`refreshToken` back. The field is required either way.
 
 ### The client never asks whether its session is valid
 
@@ -312,8 +359,10 @@ User                 email (unique, trimmed, lowercase: true), passwordHash (pri
                      lastLoginAt (default null), timestamps
 Token                tokenHash (unique index), user (ObjectId ref, indexed),
                      type ('refresh' | 'resetPassword'), familyId (indexed),
-                     expiresAt, purgeAt (required, TTL), rotatedAt?, replacedBy?,
-                     revokedAt?, revokedReason? (LOGOUT|ROTATED|PASSWORD_RESET|ADMIN),
+                     parent (ObjectId ref Token, indexed, null for a sign-in),
+                     expiresAt, purgeAt (required, TTL), rotatedAt? (first use),
+                     childCount (default 0), revokedAt?,
+                     revokedReason? (LOGOUT|SUPERSEDED|PASSWORD_RESET|ADMIN),
                      consumedAt? (reset tokens: single use)
 PasswordResetOtp     email (indexed), user (required), codeHash (NOT unique), expiresAt,
                      purgeAt (required, TTL), attempts (default: 0), consumedAt?,
@@ -368,10 +417,13 @@ The client's parser fails on a bare integer.
 
 ### Annotations
 
-- **`replacedBy` and `revokedAt` on Token are REQUIRED** for the 60-second rotation grace window.
-  `token.service.js` keeps the old token (revoked as `ROTATED`, with `rotatedAt`) rather than
-  deleting it, which is what the grace window reads. The window must
-  be time-bounded from the moment of rotation (§A10 rule l).
+- **`parent`, `rotatedAt` and `revokedAt` on Token are REQUIRED** for rotation by use (§A4,
+  §A10 rule l). A used token is kept live (`rotatedAt` set, `revokedAt` null) so it can mint a
+  sibling after a lost response; it is revoked as `SUPERSEDED` when one of its children is used.
+  Children are found by `parent` (indexed). `childCount` is written on every mint, which makes a
+  concurrent sibling mint and child use conflict on the same document instead of racing.
+  *(REVERSAL 2026-09-26: this used to be `replacedBy` + a `ROTATED` revocation read by a
+  60-second grace window — see §A4. The index change needs `npm run db:sync-indexes`, §A11.)*
 - **PasswordResetOtp is looked up by EMAIL,** the only thing verify-otp receives. `user` records
   the account a code was issued for; codes are only issued for real accounts, so an unknown
   address has no document and verify-otp answers `invalid_otp`, exactly like a wrong code. The
@@ -403,7 +455,13 @@ Contract tests (`tests/contract/`) that test the *client's assumptions*, not our
 - Every success body is a bare object; a recursive walker asserts camelCase on every key
 - `/auth/me` returns a bare user
 - Every refresh response contains `tokens.refreshToken`, even when not rotating
-- The old refresh token still works within 60s and fails after
+- The old refresh token keeps working, with no time limit, until one of its children is used, and
+  fails after *(REVERSAL 2026-09-26: this said "within 60s and fails after", §A4)*
+- A lost response: the old token retried hours later still refreshes while its child is unused
+- Two concurrent refreshes of one token both return 200
+- The R1 race (§A4): a late response overwriting a newer stored token does not sign anyone out
+- `logout` revokes the whole family: the used parent and every sibling answer 401 afterwards;
+  password reset revokes every family
 - `user.id` is a JSON string, identical across register/login/refresh/me
 - `forgot-password` returns byte-identical bodies for known and unknown addresses
 - `verify-otp` returns `invalid_otp` for both an unknown address and a wrong code
@@ -433,10 +491,17 @@ j. **Unexpected errors → `503 {"code":"unavailable"}`**, never 500 and never 4
 k. **Password:** min 8 by JS `.length` (same as Dart's `String.length`), no composition rules,
    no maximum, never trimmed, never truncated. **Email** trimmed and lowercased server-side.
    (§3.3, §8)
-l. **Refresh token ≥ 45 days (60 used), rotated, with a 60-second grace window measured from
-   the rotation time.** Inside the window the previous token returns a fresh pair and the first
-   successor stays valid; after it the previous token is dead. The window must be time-bounded.
-   (§4)
+l. **Refresh token 60 days by default, sliding, configurable 45–365 (the server refuses to start
+   outside that range); rotated on every refresh and invalidated by use, never by time.** A used
+   token keeps returning a fresh pair (a sibling), with no time limit, until one of its children
+   is used; then it is dead (`401`, logged as `'reuse'`, nothing else revoked). Using a token
+   revokes the rest of its family except its own never-used siblings, which die at the family's
+   next use. At most 10 live never-used children per token: at the cap the oldest is revoked and
+   the call still answers `200`. Full rules, the R2 accepted risk and the reuse hard gate: §A4.
+   *(REVERSAL 2026-09-26: this rule used to require a 60-second, time-bounded grace window. A
+   lost refresh response signed pilgrims out once the window had closed — audit finding 5c.)*
+   **Hard gate:** reuse stays log-only only while no endpoint serving user data accepts these
+   tokens; see §A4 before adding any such endpoint. (§4)
 m. **forgot-password:** identical 200 body, status and comparable timing for known and unknown
    addresses; never awaits email delivery. (§3.6, §6)
 n. **verify-otp order:** lockout (`429`) → expired (`400 otp_expired`, no attempt consumed) →
@@ -444,7 +509,9 @@ n. **verify-otp order:** lockout (`429`) → expired (`400 otp_expired`, no atte
    never a session. A resend voids the old code and resets attempts. 6 digits, 600s, 60s
    resend, 5 attempts. (§3.7, §5, §6)
 o. **reset-password:** single-use token, `204`, no tokens returned. (§3.8)
-p. **logout:** always `204`, including `{"refreshToken":""}` and unknown tokens. (§3.9)
+p. **logout:** always `204`, including `{"refreshToken":""}` and unknown tokens. Any known token
+   (live, used or revoked) revokes every live token in its family — that device's sign-in — so no
+   sibling survives; other devices are untouched. (§3.9)
 q. **`/auth/me`** returns a bare AuthUser, not `{user}`, with no journey, entitlement or
    profile data. (§3.10)
 r. **No entitlement endpoint, no health-data endpoint, no profile endpoint.** (§1)
@@ -499,7 +566,9 @@ and the PRS models `HealthProfile`, `HealthCondition`, `Allergy`, `Vaccination`,
 
 **Needed before building:** whether PHI is stored server-side at all; if yes, data residency
 under Saudi PDPL, the GDPR lawful basis, the consent artifact, and a DPIA. This is the largest
-open item in the project and it is not a coding decision.
+open item in the project and it is not a coding decision. **Also blocked on the §A4 hard gate:**
+refresh-token reuse is log-only today, and must be re-decided before any of these endpoints
+accepts tokens.
 
 The PRS design for these is sound and worth keeping when the decision lands — particularly:
 `passportProjection.service.ts` as the **single** scope-filtering boundary that every read path
@@ -547,7 +616,8 @@ what an SOS does when the API is unreachable.
 either side hardcodes:
 
 - Access token lifetime actually chosen
-- Whether we rotate refresh tokens, and the grace window
+- ~~Whether we rotate refresh tokens, and the grace window~~ — answered 2026-09-26: rotated,
+  invalidated by use, no grace window (§A4; HANDOVER item 5)
 - Whether we send `attemptsRemaining` on `invalid_otp` (real usability win for elderly users,
   small enumeration signal)
 - Whether we send `Retry-After` on a 429
@@ -648,8 +718,7 @@ MONGODB_AUTO_INDEX=true
 
 JWT_ACCESS_SECRET=               # required, min 32 chars
 ACCESS_TOKEN_TTL_SECONDS=900
-JWT_REFRESH_EXPIRATION_DAYS=60   # min 45 — firm floor, see A4
-REFRESH_ROTATION_GRACE_SECONDS=60
+JWT_REFRESH_EXPIRATION_DAYS=60   # 45–365, sliding; 45 is a firm floor, see A4
 RESET_TOKEN_TTL_SECONDS=600
 
 OTP_HMAC_SECRET=                 # required, min 32 chars (HMAC-SHA256 of OTP codes, §A11)

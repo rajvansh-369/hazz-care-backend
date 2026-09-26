@@ -48,8 +48,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `MONGODB_AUTO_INDEX` | `true` (indexes are also synced explicitly, §3) | |
 | `JWT_ACCESS_SECRET` | ≥ 32 characters, random | **yes** |
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | |
-| `JWT_REFRESH_EXPIRATION_DAYS` | `60` (refuses < 45: a Hajj runs ~40 days offline; refuses > 365) | |
-| `REFRESH_ROTATION_GRACE_SECONDS` | `60` | |
+| `JWT_REFRESH_EXPIRATION_DAYS` | `60`, sliding (refuses < 45: a Hajj runs ~40 days offline; refuses > 365) | |
 | `RESET_TOKEN_TTL_SECONDS` | `600` | |
 | `OTP_HMAC_SECRET` | ≥ 32 characters, random | **yes** |
 | `OTP_TTL_SECONDS` | `600` | |

@@ -758,6 +758,12 @@ and their emergency button, days from a working data connection, and cannot reco
 | Reset token (from verify-otp) | **10 minutes** | proposal, must be minutes not hours |
 | OTP code | **10 minutes** | see §5 |
 
+**[Δ 2026-09-26] What the server implements.** The refresh token lifetime is **60 days by default
+and sliding**: every successful refresh issues a token that lives a full 60 days from that moment,
+matching the client's own "every successful refresh resets the 45 days". It is configurable from
+**45 to 365 days**, and the server refuses to start with a value outside that range, so the 45-day
+floor cannot be broken by a configuration mistake.
+
 `expiresIn` is **optional** and in **seconds**. When absent the client records the lifetime as
 "unknown", which it treats as "try the call and let a 401 sort it out" — never as "already expired".
 Nothing on the launch path reads it.
@@ -774,6 +780,17 @@ precisely so that six simultaneous 401s cannot spend one refresh token six times
   coordinated with each other. Instant invalidation makes a rare but real race sign a pilgrim out.
 - **If you do not rotate:** echo the same `refreshToken` back in every refresh response. The field
   is required.
+
+**[Δ 2026-09-26] What the server implements: rotation invalidated by use, not by time.** The
+server rotates on every refresh, but there is no grace window. The previous refresh token keeps
+returning a fresh pair, with no time limit, until one of the tokens it returned has itself been
+used; only then does it answer `401`. Both uncoordinated callers get `200`, and a refresh response
+lost in transit costs nothing: the retry, however many hours later, still works. A time-bounded
+window could not survive that: the background refresher's next attempt comes six hours later, long
+after 60 seconds. Logout ends every token issued from that sign-in. Nothing on the wire changed:
+same request, same response, same status codes. The client relies only on what it already does —
+it never keys on the refresh token value, and only a `401`/`403` from `/auth/refresh` signs anyone
+out.
 
 ### The one condition that may end a session
 
@@ -1332,11 +1349,16 @@ either side hardcodes it.**
 5. **Refresh token 60 days, with rotation and a 60-second grace on the previous token.** The
    **45-day floor is firm**; everything else is negotiable. If you would rather not rotate at all,
    that is simpler and safe — just echo the token back.
+   **[Δ 2026-09-26] Answered:** 60 days, sliding, configurable 45–365 (the server refuses to start
+   outside it); rotated, with the previous token valid until one of its successors is used instead
+   of a 60-second grace — see §4.
 6. **`expiresIn` in seconds, and sent on every token response.** The client tolerates its absence.
    Confirm you will send it, or say you won't.
 7. **A "sign out all devices" action.** Not designed, not in the client. If you build per-device
    refresh tokens now it will be cheap later; if you build one shared token it will not be.
    `/auth/logout` today revokes one refresh token — confirm that is what you'll implement.
+   **[Δ 2026-09-26] Answered:** logout revokes that device's session — the token sent and every
+   token issued from the same sign-in — and nothing on other devices. Per-device, as proposed.
 
 **Accounts**
 

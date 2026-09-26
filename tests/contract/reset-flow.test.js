@@ -393,7 +393,7 @@ describe('password reset flow', () => {
       expect((await login(email, NEW_PASSWORD)).status).toBe(200);
     });
 
-    it('afterwards every refresh token the user held → 401, including one rotated < 60s before', async () => {
+    it('afterwards every refresh token the user held → 401, used or not, in every family', async () => {
       const registered = await signUp();
       const other = await login(registered.email, PASSWORD);
       const rotated = await refresh(other.body.tokens.refreshToken);
@@ -403,7 +403,7 @@ describe('password reset flow', () => {
 
       for (const token of [
         registered.tokens.refreshToken,
-        other.body.tokens.refreshToken, // rotated moments ago: inside the grace window
+        other.body.tokens.refreshToken, // used, child unused: it could still mint a sibling
         rotated.body.tokens.refreshToken,
       ]) {
         // eslint-disable-next-line no-await-in-loop
