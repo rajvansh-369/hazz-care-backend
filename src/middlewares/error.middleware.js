@@ -97,8 +97,64 @@ const logUnexpected = (req, err, reason) => {
   });
 };
 
-/** 404 for anything outside the auth router. The auth router has its own 503 catch-all. */
-const notFoundHandler = (req, res) => sendJson(res, 404, { code: errorCodes.not_found });
+/** The "scheme://authority" of an absolute-form request target (RFC 9112 §3.2.2). */
+const ABSOLUTE_FORM = /^[a-z][a-z0-9+.-]*:\/\/[^/\\]*/i;
+
+/**
+ * The path of a request target as lowercase segments: query dropped, backslashes
+ * read as "/", empty segments (a doubled "/") and "." dropped, ".." resolved, and
+ * each segment trimmed. With `decode`, ASCII %XX escapes are decoded first; that can
+ * never throw, because malformed and non-ASCII escapes are simply left as they are.
+ */
+const pathSegments = (target, { decode }) => {
+  let path = String(target).replace(ABSOLUTE_FORM, '').split('?')[0];
+  if (decode) {
+    path = path.replace(/%([0-7][0-9a-f])/gi, (escape, hex) =>
+      String.fromCharCode(parseInt(hex, 16))
+    );
+  }
+  const segments = [];
+  path
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .split('/')
+    .map((segment) => segment.trim())
+    .forEach((segment) => {
+      if (segment === '..') {
+        segments.pop();
+      } else if (segment !== '' && segment !== '.') {
+        segments.push(segment);
+      }
+    });
+  return segments;
+};
+
+/**
+ * True when a request that matched no route was meant for the auth API: its path has
+ * an "auth" segment anywhere, decoded or raw. That covers every spelling Express does
+ * not route into the auth router (`//api/v1/auth/login`, `/api/v1/./auth/login`,
+ * `/api/v1/%61uth/x`, `/api/v1/auth\x`) and a client built with the wrong base URL
+ * (`/auth/login`, `/v1/auth/login`, `/api/v2/auth/login`); `${apiPrefix}/auth` is
+ * just the common case. `/auths`, `/auth-login` and the like are not an auth segment.
+ */
+const isAuthLikePath = (target) =>
+  pathSegments(target, { decode: true }).includes('auth') ||
+  pathSegments(target, { decode: false }).includes('auth');
+
+/**
+ * Answers every request that matched no route. The auth router has its own 503
+ * catch-all; this catches what never reached it. Anything that looks like an auth
+ * request is 503 {"code":"unavailable"}, never 404: the client shows any 404 under
+ * /auth as "We could not find an account for that email address", and on
+ * forgot-password as a code that was sent (BACKEND_SPEC.md §3.2, CLAUDE.md A10 f).
+ * Everything else is 404 {"code":"not_found"}.
+ */
+const notFoundHandler = (req, res) => {
+  if (isAuthLikePath(req.originalUrl || req.url || '')) {
+    return sendJson(res, 503, { code: errorCodes.unavailable });
+  }
+  return sendJson(res, 404, { code: errorCodes.not_found });
+};
 
 /**
  * Single place where an error becomes an HTTP response. Never defaults to 500, 401,
@@ -163,4 +219,4 @@ const errorHandler = (err, req, res, next) => {
   return sendJson(res, 503, { code: errorCodes.unavailable });
 };
 
-module.exports = { errorHandler, notFoundHandler, authSubPath };
+module.exports = { errorHandler, notFoundHandler, authSubPath, isAuthLikePath };

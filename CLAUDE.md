@@ -484,6 +484,23 @@ d. **Only `POST /auth/refresh` answering 401/403 can sign a pilgrim out**; a JSO
 e. **401, never 403, for an expired access token.** (§3.2)
 f. **Never 404 under the auth router** — not even for an unknown path. Unknown auth paths
    return `503 {"code":"unavailable"}`. (§3.2, §3.6)
+   *(DECIDED 2026-09-26.)* §3.2 forbids the 404 but names no replacement status; these are our
+   choices:
+   - An unknown auth path → `503 {"code":"unavailable"}` (the auth router's catch-all).
+   - A wrong method on a real auth path (`GET /auth/login`) → the same 503. **No 405**: the
+     client would file it under "other 4xx" and tell the pilgrim to fix input that was fine.
+   - A request that never reaches the auth router → the global not-found handler
+     (`isAuthLikePath` in `src/middlewares/error.middleware.js`) normalises the path:
+     query dropped, `\` read as `/`, ASCII `%XX` decoded (malformed escapes left as they are,
+     never a crash), `//` collapsed, `.` and `..` resolved, segments trimmed and lowercased.
+     If the result, or the raw path, has an `auth` segment anywhere, the answer is `503
+     {"code":"unavailable"}`. That covers `//api/v1/auth/login`, `/api/v1/./auth/login`,
+     `/api/v1/%61uth/…`, `/api/v1/auth\…`, and a client built with the wrong base URL
+     (`/auth/login`, `/v1/auth/login`, `/api/v2/auth/login`).
+   - Everything else stays `404 {"code":"not_found"}`, including `/auths`, `/auth-login` and
+     `/oauth`, since "auth" must be a whole segment.
+   Tests: `tests/contract/no-404-under-auth.test.js` (raw sockets, so the target is not
+   normalised before it is sent) and `tests/unit/isAuthLikePath.test.js`.
 g. **Never 409 under `/auth`** except duplicate registration (`email_taken`). (§3.2)
 h. **Never 401/403 from register, forgot-password, verify-otp, reset-password.** (§3.2)
 i. **Never 429 from login or register.** (§3.3, §3.4)

@@ -87,7 +87,9 @@ app.use('/health', require('./routes/v1/health.route'));
 // 11. Versioned API: /health and /auth. The auth router ends in its own 503 catch-all.
 app.use(config.apiPrefix, routes);
 
-// 12. Everything else (outside the auth router) → 404 {"code":"not_found"}.
+// 12. Everything else → 404 {"code":"not_found"}, except a path with an "auth" segment
+// that never reached the auth router (//api/v1/auth, %61uth, a wrong base URL...),
+// which is 503 {"code":"unavailable"}, never 404 (CLAUDE.md A10 f).
 app.use(notFoundHandler);
 
 // 13. The error handler, last.
