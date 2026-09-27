@@ -4,6 +4,7 @@ module.exports = {
   authService: require('./auth.service'),
   emailService: require('./email.service'),
   healthService: require('./health.service'),
+  loginThrottleService: require('./loginThrottle.service'),
   otpService: require('./otp.service'),
   passwordService: require('./password.service'),
   revenueCatService: require('./revenueCat.service'),

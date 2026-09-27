@@ -12,12 +12,47 @@ const request = require('supertest');
 
 const app = require('../../src/app');
 const config = require('../../src/config/config');
-const { User, Token } = require('../../src/models');
+const { User, Token, RateLimit } = require('../../src/models');
+const loginThrottleService = require('../../src/services/loginThrottle.service');
 const passwordService = require('../../src/services/password.service');
 const setupTestDB = require('../utils/setupTestDB');
 
 const AUTH = `${config.apiPrefix}/auth`;
 const PASSWORD = 'correct horse battery';
+
+// Twelve attempts on one address: the first five wait nothing, then 1s, 2s, 4s, 5s…
+const TWELVE_DELAYS = [0, 0, 0, 0, 0, 1000, 2000, 4000, 5000, 5000, 5000, 5000];
+
+/**
+ * Swaps the login delay for one that records instead of sleeping, on a fixed clock so
+ * every attempt falls in one window. Returns the ordered log of what each request did:
+ * "sleep <ms>" and "argon2", so a test can see that the sleep came before the hash.
+ */
+const recordLoginDelays = () => {
+  const events = [];
+  const fixedNow = new Date();
+  const throttle = loginThrottleService.createLoginThrottleService({
+    now: () => fixedNow,
+    sleep: async (ms) => {
+      events.push(`sleep ${ms}`);
+    },
+  });
+  const verify = passwordService.verify;
+  jest.spyOn(passwordService, 'verify').mockImplementation((...args) => {
+    events.push('argon2');
+    return verify(...args);
+  });
+  jest.spyOn(loginThrottleService, 'beforeAttempt').mockImplementation(throttle.beforeAttempt);
+  jest.spyOn(loginThrottleService, 'clear').mockImplementation(throttle.clear);
+  return events;
+};
+
+/** The log recordLoginDelays() expects for sequential attempts waiting these delays. */
+const expectedEvents = (delays) =>
+  delays.flatMap((ms) => (ms > 0 ? [`sleep ${ms}`, 'argon2'] : ['argon2']));
+
+const loginFailCounts = async () =>
+  (await RateLimit.find({ key: /^login-fail:/ }).lean()).map((doc) => doc.count).sort();
 
 /** Every response in this file, for the global assertions at the end. */
 const seen = [];
@@ -74,8 +109,12 @@ describe('register, login and /auth/me', () => {
   setupTestDB();
 
   beforeAll(async () => {
-    await Promise.all([User.createCollection(), Token.createCollection()]);
-    await Promise.all([User.init(), Token.init()]);
+    await Promise.all([
+      User.createCollection(),
+      Token.createCollection(),
+      RateLimit.createCollection(),
+    ]);
+    await Promise.all([User.init(), Token.init(), RateLimit.init()]);
   });
 
   describe('POST /auth/register', () => {
@@ -404,6 +443,8 @@ describe('register, login and /auth/me', () => {
     });
 
     it('20 rapid failed logins → never 429, never 403', async () => {
+      // Recorded rather than slept: the delay itself is tested below.
+      recordLoginDelays();
       const results = await Promise.all(
         Array.from({ length: 20 }, () =>
           login({ email: 'pilgrim@example.com', password: 'wrong password' })
@@ -411,6 +452,107 @@ describe('register, login and /auth/me', () => {
       );
       results.forEach((res) => expect(res.status).toBe(401));
       expect((await login({ email: 'pilgrim@example.com', password: PASSWORD })).status).toBe(200);
+    });
+
+    describe('progressive delay after repeated failures (CLAUDE.md A7)', () => {
+      const wrong = (email = 'pilgrim@example.com') => login({ email, password: 'wrong password' });
+
+      const sequentially = async (times, attempt) => {
+        const results = [];
+        for (let i = 0; i < times; i += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          results.push(await attempt());
+        }
+        return results;
+      };
+
+      it('12 sequential wrong passwords: all 401 invalid_credentials; the 6th onwards wait 1s, 2s, 4s, 5s, each before argon2', async () => {
+        const events = recordLoginDelays();
+        const results = await sequentially(12, () => wrong());
+        results.forEach((res) => {
+          expect(res.status).toBe(401);
+          expect(res.body).toEqual({ code: 'invalid_credentials' });
+        });
+        expect(events).toEqual(expectedEvents(TWELVE_DELAYS));
+        await expect(loginFailCounts()).resolves.toEqual([12]);
+      });
+
+      it('the right password after failures still succeeds, after its delay, and clears the count', async () => {
+        const events = recordLoginDelays();
+        await sequentially(7, () => wrong());
+
+        const res = await login({ email: 'pilgrim@example.com', password: PASSWORD });
+        expect(res.status).toBe(200);
+        expectSessionShape(res.body);
+        expect(events).toEqual(expectedEvents([0, 0, 0, 0, 0, 1000, 2000, 4000]));
+        await expect(loginFailCounts()).resolves.toEqual([]);
+
+        // Cleared: the next five failures wait nothing again.
+        events.length = 0;
+        const after = await sequentially(5, () => wrong());
+        after.forEach((r) => expect(r.status).toBe(401));
+        expect(events).toEqual(expectedEvents([0, 0, 0, 0, 0]));
+      });
+
+      it('an unknown address is counted and delayed exactly like a known one', async () => {
+        const events = recordLoginDelays();
+        const known = await sequentially(12, () => wrong('pilgrim@example.com'));
+        const knownEvents = events.splice(0);
+        const unknown = await sequentially(12, () => wrong('nobody@example.com'));
+
+        expect(events).toEqual(knownEvents);
+        expect(unknown.map((r) => [r.status, r.text])).toEqual(
+          known.map((r) => [r.status, r.text])
+        );
+        await expect(loginFailCounts()).resolves.toEqual([12, 12]);
+      });
+
+      it('parallel wrong attempts are all counted and all answer 401', async () => {
+        const events = recordLoginDelays();
+        const results = await Promise.all(Array.from({ length: 12 }, () => wrong()));
+        results.forEach((res) => {
+          expect(res.status).toBe(401);
+          expect(res.body).toEqual({ code: 'invalid_credentials' });
+        });
+        await expect(loginFailCounts()).resolves.toEqual([12]);
+        const sleeps = events.filter((e) => e.startsWith('sleep')).map((e) => Number(e.slice(6)));
+        expect(sleeps.sort((a, b) => a - b)).toEqual(TWELVE_DELAYS.filter((ms) => ms > 0));
+        expect(events.filter((e) => e === 'argon2')).toHaveLength(12);
+      });
+
+      it('the delay is real, and the answer stays far inside the 15 s receive timeout', async () => {
+        const fixedNow = new Date();
+        const throttle = loginThrottleService.createLoginThrottleService({ now: () => fixedNow });
+        jest
+          .spyOn(loginThrottleService, 'beforeAttempt')
+          .mockImplementation(throttle.beforeAttempt);
+        jest.spyOn(loginThrottleService, 'clear').mockImplementation(throttle.clear);
+        await sequentially(5, () => wrong());
+
+        let startedAt = Date.now();
+        const sixth = await wrong();
+        const sixthMs = Date.now() - startedAt;
+        expect(sixth.status).toBe(401);
+        expect(sixth.body).toEqual({ code: 'invalid_credentials' });
+        expect(sixthMs).toBeGreaterThanOrEqual(990);
+        expect(sixthMs).toBeLessThan(15000);
+
+        startedAt = Date.now();
+        const right = await login({ email: 'pilgrim@example.com', password: PASSWORD });
+        const rightMs = Date.now() - startedAt;
+        expect(right.status).toBe(200);
+        expect(rightMs).toBeGreaterThanOrEqual(1990);
+        expect(rightMs).toBeLessThan(15000);
+      });
+
+      it('the counter failing → 503 unavailable, never 401 or 429', async () => {
+        jest.spyOn(RateLimit, 'findOneAndUpdate').mockImplementationOnce(() => {
+          throw new Error('connection reset');
+        });
+        const res = await login({ email: 'pilgrim@example.com', password: PASSWORD });
+        expect(res.status).toBe(503);
+        expect(res.body).toEqual({ code: 'unavailable' });
+      });
     });
   });
 

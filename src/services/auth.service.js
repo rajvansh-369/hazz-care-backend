@@ -5,6 +5,7 @@ const config = require('../config/config');
 const { User } = require('../models');
 const ApiError = require('../utils/ApiError');
 const emailService = require('./email.service');
+const loginThrottleService = require('./loginThrottle.service');
 const otpService = require('./otp.service');
 const passwordService = require('./password.service');
 const sendLimitService = require('./sendLimit.service');
@@ -58,12 +59,17 @@ const register = async ({ email, password, fullName }) => {
 /**
  * Unknown address and wrong password are indistinguishable: same status, same body,
  * and the unknown path verifies against a dummy argon2id hash so it costs the same.
- * No lockout and no rate limit (BACKEND_SPEC.md §3.4).
+ * No lockout and no 429 (BACKEND_SPEC.md §3.4): after five failures on one address,
+ * answers are only slowed down (loginThrottle.service, CLAUDE.md A7).
  *
  * @param {{ email: string, password: string }} input validated, email normalised
  * @returns {Promise<{ user: object, tokens: object }>}
  */
 const login = async ({ email, password }) => {
+  // Before the lookup and before argon2, for every address: parallel attempts are all
+  // counted, and a delayed request holds no argon2 thread while it waits.
+  await loginThrottleService.beforeAttempt(email);
+
   const user = await User.findOne({ email }).select('+passwordHash');
 
   if (!user) {
@@ -73,6 +79,7 @@ const login = async ({ email, password }) => {
   if (!(await passwordService.verify(user.passwordHash, password))) {
     throw ApiError.invalidCredentials();
   }
+  await loginThrottleService.clear(email);
 
   user.lastLoginAt = new Date();
   await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: user.lastLoginAt } });

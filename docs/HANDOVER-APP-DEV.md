@@ -44,7 +44,7 @@ Force the real client with `--dart-define=HAJJCARE_USE_MOCK_BACKEND=false`.
 | 15. `Retry-After` on 429 | **No change.** The app does not read `Retry-After`. The per-IP limiters' `429`s already send it (seconds, plus `RateLimit`/`RateLimit-Policy`); the per-address forgot-password `429` and the OTP lockout `429` do not, and need not |
 | 16. Reset token | **600 s, single-use**. `verify-otp` returns a reset token only, never a session; `reset-password` returns `204` with no tokens |
 | 17. Email language | **English only**, see below |
-| 18. Login brute-force protection | **None: no `429` on login or register, ever** |
+| 18. Login brute-force protection | **No `429` on login or register, ever.** **[Changed 2026-09-27]** A progressive delay only: after 5 failed sign-ins for one address within 15 minutes, each further answer is held back 1 s, 2 s, 4 s, then 5 s (never more), then sent exactly as before (`401 invalid_credentials`, or `200` for the right password, which also resets the count). No change to any request, response or status code. **Your call, still open:** a silent lockout (the right password also answered `401` for a while), or a new error code with its own message in all seven languages |
 | 19. Forgot-password limits | 5 codes per address per hour, plus a per-IP limit → `429 too_many_attempts` |
 | 20. Refresh under load | `429` or `503`, never `401`. Only a genuinely dead refresh token gets `401 {"code":"session_revoked"}` |
 

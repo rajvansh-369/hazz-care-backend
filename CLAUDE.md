@@ -335,7 +335,8 @@ await SMTP, keep the unknown-address path doing comparable work.
 `404`, never `account_not_found`.
 
 `login` for an unknown address answers `401 invalid_credentials`, never `404`. Run a dummy
-password hash so timing does not leak.
+password hash so timing does not leak. The login delay (§A7) counts and delays an unknown
+address exactly like a known one.
 
 ## A7. Rate limiting — exactly here, nowhere else
 
@@ -343,11 +344,34 @@ password hash so timing does not leak.
 |---|---|
 | `/auth/forgot-password` | per-email and per-IP → `429 {"code":"too_many_attempts"}` |
 | `/auth/verify-otp` | the 5-attempt per-OTP lockout above |
-| `/auth/login` | **none.** Adding one needs a new error code + 7 translations |
+| `/auth/login` | **no limit, no `429`, ever.** A progressive delay only, below. Anything that refuses an attempt needs a new error code + 7 translations |
 | `/auth/register` | **none.** A `429` here shows the OTP wording on the sign-up form (BACKEND_SPEC.md §3.3) |
 | `/auth/refresh` | if limited at all → `429` or `503`. **Never `401`** |
 
 Mount per-route, never on the router, so a future route cannot silently inherit one.
+
+### Login: progressive delay (option 1, decided 2026-09-27)
+
+`src/services/loginThrottle.service.js`, called from `auth.service.login`. Tests:
+`tests/unit/loginThrottle.service.test.js` and the "progressive delay" block in
+`tests/contract/register-login-me.test.js`.
+
+- **Counted per `sha256(trimmed, lowercased email)`** in `RateLimit`, key
+  `login-fail:<sha256>:<15-minute bucket>` (fixed windows, like the OTP send limit). Every attempt
+  is counted **before** the user lookup and argon2, as if it will fail (atomic `$inc` upsert), so
+  parallel attempts all count and an unknown address is counted exactly like a known one.
+- **After 5 failures in the window, the answer waits** 1 s, 2 s, 4 s, then 5 s for every further
+  attempt (never more). The wait happens **before** argon2, so a waiting request holds no argon2
+  thread. The right password still waits its turn, then succeeds and **clears the count**.
+- **Status and body never change:** `401 invalid_credentials` or `200`. Never `429`, never `403`.
+  At most 5 s + argon2 is far inside the client's 15 s receive timeout. A failing counter is a
+  database error like any other → `503 unavailable`.
+- **What it does not do:** it bounds how long one attempt takes, not how many run at once —
+  attempts sent in parallel each wait side by side. And anyone who knows an address can make that
+  pilgrim's next sign-in wait up to 5 s. Both are accepted.
+- **Pending the app developer's decision, not built:** option 2, a silent lockout (refuse even
+  the right password for a while, answered as the same `401 invalid_credentials`), and option 3,
+  a new error code for "too many sign-in attempts" (a client change and 7 translations). See §B5.
 
 ## A8. Layer A data model
 
@@ -375,7 +399,8 @@ RevenueCatEvent      _id (set to event.id directly), type, appUserId (indexed),
 Entitlement          user (unique), entitlementId (from config, default "hajjcare_pass"),
                      store?, transactionId?, grantedAt, revokedAt?
                                                     — NO expiry field of any kind
-RateLimit            key (unique, e.g. "otp-send:<sha256(email)>:<hour-bucket>"),
+RateLimit            key (unique, e.g. "otp-send:<sha256(email)>:<hour-bucket>",
+                     "login-fail:<sha256(email)>:<15-minute-bucket>"),
                      count (default 0), purgeAt (TTL)
 AliasLink            alias (unique RevenueCat App User ID), user (null until resolved)
 ```
@@ -503,7 +528,8 @@ f. **Never 404 under the auth router** — not even for an unknown path. Unknown
    normalised before it is sent) and `tests/unit/isAuthLikePath.test.js`.
 g. **Never 409 under `/auth`** except duplicate registration (`email_taken`). (§3.2)
 h. **Never 401/403 from register, forgot-password, verify-otp, reset-password.** (§3.2)
-i. **Never 429 from login or register.** (§3.3, §3.4)
+i. **Never 429 from login or register.** The login delay (§A7) changes timing only, never the
+   status or body. (§3.3, §3.4)
 j. **Unexpected errors → `503 {"code":"unavailable"}`**, never 500 and never 401. (§3.2)
 k. **Password:** min 8 by JS `.length` (same as Dart's `String.length`), no composition rules,
    no maximum, never trimmed, never truncated. **Email** trimmed and lowercased server-side.
@@ -640,7 +666,9 @@ either side hardcodes:
 - Whether we send `Retry-After` on a 429
 - What language the reset email is written in — **the client sends no locale today**, so
   localised emails need a client change first
-- Whether login gets brute-force protection (needs a new code + 7 translations)
+- Whether login gets brute-force protection — partly answered 2026-09-27: option 1, a
+  progressive delay with no change to status or body, is built (§A7). **Waiting on the app
+  developer:** option 2 (silent lockout) and option 3 (a new error code + 7 translations)
 
 ---
 

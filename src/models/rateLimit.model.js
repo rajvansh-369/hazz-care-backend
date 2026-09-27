@@ -4,8 +4,9 @@ const mongoose = require('mongoose');
 
 /**
  * Fixed-window counters, one document per key per window, keyed like
- * "otp-send:<sha256(email)>:<hour-bucket>". The service increments with an upsert and
- * sets purgeAt past the end of the window; the TTL index cleans up behind it.
+ * "otp-send:<sha256(email)>:<hour-bucket>" or "login-fail:<sha256(email)>:<15-minute
+ * bucket>". The services increment with an upsert and set purgeAt past the end of the
+ * window; the TTL index cleans up behind it.
  */
 const rateLimitSchema = new mongoose.Schema({
   key: {
